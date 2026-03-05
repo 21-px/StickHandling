@@ -34,13 +34,18 @@ class PuckTracker: ObservableObject {
     
     // Frame throttling for performance
     private var frameCount: Int = 0
-    private let processEveryNthFrame = 2 // Process every 2nd frame (30fps → 15fps processing, still very smooth)
+    private let processEveryNthFrame = 1 // Process every frame now that we've optimized
     
     // Processing queue for background work
     private let processingQueue = DispatchQueue(label: "com.stickhandle.processing", qos: .userInitiated)
     
-    // Core Image context for image processing
-    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+    // Core Image context for image processing (reuse for efficiency)
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false, .priorityRequestLow: false])
+    
+    // Cache the color cube to avoid recreating it every frame
+    private lazy var colorCubeData: Data = {
+        return createGreenColorCube()
+    }()
     
     /// Process a video frame to detect the green puck
     /// Call this for each frame from the camera
@@ -130,9 +135,9 @@ class PuckTracker: ObservableObject {
         
         let buffer = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
         
-        // Downsample for speed - check every Nth pixel
-        // This is much faster and still accurate for tracking
-        let sampleStep = 2 // Check every 2nd pixel (4x faster!)
+        // Aggressive downsampling for maximum speed
+        // Check every 3rd pixel (9x faster than checking every pixel!)
+        let sampleStep = 3
         
         // Find all white pixels (green regions in the mask)
         var sumX: CGFloat = 0
@@ -143,15 +148,19 @@ class PuckTracker: ObservableObject {
         var minY: Int = height
         var maxY: Int = 0
         
+        // Use stride for faster iteration
         for y in stride(from: 0, to: height, by: sampleStep) {
             for x in stride(from: 0, to: width, by: sampleStep) {
                 let offset = (y * width + x) * 4
+                
+                // Fast check: only look at one color channel first
+                guard buffer[offset] > 128 else { continue }
+                
                 let r = buffer[offset]
                 let g = buffer[offset + 1]
                 let b = buffer[offset + 2]
                 
                 // Check if pixel is white (part of green mask)
-                // Threshold of 128 to account for partial transparency
                 if r > 128 && g > 128 && b > 128 {
                     sumX += CGFloat(x)
                     sumY += CGFloat(y)
@@ -166,7 +175,8 @@ class PuckTracker: ObservableObject {
         }
         
         // Need at least some pixels to consider it a detection
-        let minPixels = 100 // Minimum number of green pixels
+        // Lower threshold since we're downsampling aggressively
+        let minPixels = 25 // Minimum number of sampled green pixels
         guard pixelCount > minPixels else {
             return nil
         }
@@ -209,19 +219,17 @@ class PuckTracker: ObservableObject {
     /// Create a binary mask highlighting green regions
     private func createColorMask(for image: CIImage) -> CIImage? {
         
-        // Reduce image size for MUCH faster processing
-        // Scale down to 320px wide (keeps aspect ratio) - smaller = faster!
-        let scale = 320.0 / image.extent.width
+        // Reduce image size even MORE for maximum speed
+        // Scale down to 160px wide - much faster, still accurate enough for tracking
+        let scale = 160.0 / image.extent.width
         let scaledImage = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         
-        // Use CIColorCube filter to create a custom color lookup table
-        // This is like writing a custom WebGL shader for color filtering
-        let cubeData = createGreenColorCube()
+        // Use cached color cube data instead of recreating every frame
         let cubeSize = 64
         
         let colorCube = CIFilter(name: "CIColorCube")
         colorCube?.setValue(cubeSize, forKey: "inputCubeDimension")
-        colorCube?.setValue(cubeData, forKey: "inputCubeData")
+        colorCube?.setValue(colorCubeData, forKey: "inputCubeData")
         colorCube?.setValue(scaledImage, forKey: kCIInputImageKey)
         
         return colorCube?.outputImage
