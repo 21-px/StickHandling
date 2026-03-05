@@ -34,7 +34,10 @@ class PuckTracker: ObservableObject {
     
     // Frame throttling for performance
     private var frameCount: Int = 0
-    private let processEveryNthFrame = 3 // Only process every 3rd frame for better performance
+    private let processEveryNthFrame = 2 // Process every 2nd frame (30fps → 15fps processing, still very smooth)
+    
+    // Processing queue for background work
+    private let processingQueue = DispatchQueue(label: "com.stickhandle.processing", qos: .userInitiated)
     
     // Core Image context for image processing
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
@@ -43,30 +46,34 @@ class PuckTracker: ObservableObject {
     /// Call this for each frame from the camera
     func processFrame(_ pixelBuffer: CVPixelBuffer) {
         // Throttle frame processing for performance
-        // Like using requestAnimationFrame with throttle in JavaScript
         frameCount += 1
         if frameCount % processEveryNthFrame != 0 {
             return
         }
         
-        // Convert pixel buffer to CIImage for processing
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        
-        // Detect green regions in the image
-        if let position = detectGreenPuck(in: ciImage, pixelBuffer: pixelBuffer) {
-            DispatchQueue.main.async {
-                self.puckPosition = position
-                self.isTracking = true
-                self.trackingConfidence = position.confidence
-                self.lastDetectionTime = Date()
-            }
-        } else {
-            // Check if we've lost tracking
-            let timeSinceLastDetection = Date().timeIntervalSince(lastDetectionTime)
-            if timeSinceLastDetection > detectionTimeout {
+        // Process on background queue to avoid blocking main thread
+        processingQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            // Convert pixel buffer to CIImage for processing
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            
+            // Detect green regions in the image
+            if let position = self.detectGreenPuck(in: ciImage, pixelBuffer: pixelBuffer) {
                 DispatchQueue.main.async {
-                    self.isTracking = false
-                    self.trackingConfidence = 0.0
+                    self.puckPosition = position
+                    self.isTracking = true
+                    self.trackingConfidence = position.confidence
+                    self.lastDetectionTime = Date()
+                }
+            } else {
+                // Check if we've lost tracking
+                let timeSinceLastDetection = Date().timeIntervalSince(self.lastDetectionTime)
+                if timeSinceLastDetection > self.detectionTimeout {
+                    DispatchQueue.main.async {
+                        self.isTracking = false
+                        self.trackingConfidence = 0.0
+                    }
                 }
             }
         }
@@ -123,6 +130,10 @@ class PuckTracker: ObservableObject {
         
         let buffer = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
         
+        // Downsample for speed - check every Nth pixel
+        // This is much faster and still accurate for tracking
+        let sampleStep = 2 // Check every 2nd pixel (4x faster!)
+        
         // Find all white pixels (green regions in the mask)
         var sumX: CGFloat = 0
         var sumY: CGFloat = 0
@@ -132,8 +143,8 @@ class PuckTracker: ObservableObject {
         var minY: Int = height
         var maxY: Int = 0
         
-        for y in 0..<height {
-            for x in 0..<width {
+        for y in stride(from: 0, to: height, by: sampleStep) {
+            for x in stride(from: 0, to: width, by: sampleStep) {
                 let offset = (y * width + x) * 4
                 let r = buffer[offset]
                 let g = buffer[offset + 1]
@@ -174,12 +185,6 @@ class PuckTracker: ObservableObject {
         let normalizedY = centerY / CGFloat(height)
         let normalizedRadius = CGFloat(radius) / CGFloat(min(width, height))
         
-        // Debug: Print detection info
-        print("🎯 Detection - Width: \(width), Height: \(height)")
-        print("🎯 Center: (\(Int(centerX)), \(Int(centerY)))")
-        print("🎯 Normalized: (\(String(format: "%.2f", normalizedX)), \(String(format: "%.2f", normalizedY)))")
-        print("🎯 PixelCount: \(pixelCount)")
-        
         // Calculate confidence based on:
         // 1. Number of pixels (more pixels = higher confidence)
         // 2. Aspect ratio (circular = higher confidence)
@@ -204,9 +209,9 @@ class PuckTracker: ObservableObject {
     /// Create a binary mask highlighting green regions
     private func createColorMask(for image: CIImage) -> CIImage? {
         
-        // Reduce image size for faster processing
-        // Scale down to 640px wide (keeps aspect ratio)
-        let scale = 640.0 / image.extent.width
+        // Reduce image size for MUCH faster processing
+        // Scale down to 320px wide (keeps aspect ratio) - smaller = faster!
+        let scale = 320.0 / image.extent.width
         let scaledImage = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         
         // Use CIColorCube filter to create a custom color lookup table
