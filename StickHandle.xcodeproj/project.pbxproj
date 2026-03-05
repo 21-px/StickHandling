@@ -6,8 +6,13 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		8FE791362F590AEF0094B32F /* CLAUDE.md in Sources */ = {isa = PBXBuildFile; fileRef = 8FE791352F590AE50094B32F /* CLAUDE.md */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		8FD1C98B2F57DCC400840661 /* StickHandle.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StickHandle.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8FE791352F590AE50094B32F /* CLAUDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = CLAUDE.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -34,6 +39,7 @@
 			children = (
 				8FD1C98D2F57DCC400840661 /* StickHandle */,
 				8FD1C98C2F57DCC400840661 /* Products */,
+				8FE791352F590AE50094B32F /* CLAUDE.md */,
 			);
 			sourceTree = "<group>";
 		};
@@ -119,6 +125,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8FE791362F590AEF0094B32F /* CLAUDE.md in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
