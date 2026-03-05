@@ -18,65 +18,82 @@ struct PuckTrackingView: View {
     @StateObject private var cameraManager = CameraManager()
     @StateObject private var puckTracker = PuckTracker()
     
-    @State private var viewSize: CGSize = .zero
-    
     var body: some View {
-        ZStack {
-            // Camera preview layer
-            CameraPreview(cameraManager: cameraManager)
-                .edgesIgnoringSafeArea(.all)
-            
-            // Puck tracking overlay
-            if let puckPosition = puckTracker.puckPosition {
-                PuckOverlay(position: puckPosition, viewSize: viewSize)
-            }
-            
-            // Status overlay (top of screen)
-            VStack {
-                TrackingStatusView(
-                    isTracking: puckTracker.isTracking,
-                    confidence: puckTracker.trackingConfidence
-                )
-                .padding()
-                .background(Color.black.opacity(0.5))
-                .cornerRadius(10)
-                .padding()
+        GeometryReader { geometry in
+            ZStack {
+                // Camera preview layer
+                CameraPreview(cameraManager: cameraManager)
+                    .edgesIgnoringSafeArea(.all)
                 
-                Spacer()
+                // Puck tracking overlay
+                if let puckPosition = puckTracker.puckPosition {
+                    PuckOverlay(position: puckPosition, viewSize: geometry.size)
+                        .id("\(puckPosition.x)-\(puckPosition.y)") // Force update when position changes
+                }
+                
+                // Debug info at top (separate from circle)
+                if let puckPosition = puckTracker.puckPosition {
+                    VStack {
+                        Spacer().frame(height: 100) // Below the status indicator
+                        
+                        VStack(spacing: 4) {
+                            let screenPos = puckPosition.toScreenCoordinates(viewSize: geometry.size)
+                            Text("Screen: (\(Int(screenPos.x)), \(Int(screenPos.y)))")
+                                .font(.caption)
+                                .foregroundColor(.yellow)
+                            Text("Normalized: (\(String(format: "%.3f", puckPosition.x)), \(String(format: "%.3f", puckPosition.y)))")
+                                .font(.caption)
+                                .foregroundColor(.yellow)
+                            Text("ViewSize: \(Int(geometry.size.width)) x \(Int(geometry.size.height))")
+                                .font(.caption)
+                                .foregroundColor(.yellow)
+                        }
+                        .padding(8)
+                        .background(Color.black.opacity(0.8))
+                        .cornerRadius(8)
+                        
+                        Spacer()
+                    }
+                }
+                
+                // Status overlay (top of screen)
+                VStack {
+                    TrackingStatusView(
+                        isTracking: puckTracker.isTracking,
+                        confidence: puckTracker.trackingConfidence
+                    )
+                    .padding()
+                    .background(Color.black.opacity(0.5))
+                    .cornerRadius(10)
+                    .padding()
+                    
+                    Spacer()
+                }
             }
-        }
-        .background(GeometryReader { geometry in
-            Color.clear.preference(
-                key: SizePreferenceKey.self,
-                value: geometry.size
-            )
-        })
-        .onPreferenceChange(SizePreferenceKey.self) { size in
-            viewSize = size
-        }
-        .onReceive(cameraManager.frames) { frame in
-            // Process each frame as it comes in
-            puckTracker.processFrame(frame)
-        }
-        .task {
-            // Request camera access when view appears
-            await cameraManager.requestAccess()
-            
-            if cameraManager.isAuthorized {
-                // Start camera session
-                cameraManager.startSession()
+            .onReceive(cameraManager.frames) { frame in
+                // Process each frame as it comes in
+                puckTracker.processFrame(frame)
             }
-        }
-        .onDisappear {
-            cameraManager.stopSession()
-        }
-        .alert("Camera Error", isPresented: .constant(cameraManager.error != nil)) {
-            Button("OK") {
-                // In a real app, might want to open Settings
+            .task {
+                // Request camera access when view appears
+                await cameraManager.requestAccess()
+                
+                if cameraManager.isAuthorized {
+                    // Start camera session
+                    cameraManager.startSession()
+                }
             }
-        } message: {
-            if let error = cameraManager.error {
-                Text(error.localizedDescription)
+            .onDisappear {
+                cameraManager.stopSession()
+            }
+            .alert("Camera Error", isPresented: .constant(cameraManager.error != nil)) {
+                Button("OK") {
+                    // In a real app, might want to open Settings
+                }
+            } message: {
+                if let error = cameraManager.error {
+                    Text(error.localizedDescription)
+                }
             }
         }
     }
@@ -132,12 +149,21 @@ struct PuckOverlay: View {
         let screenPosition = position.toScreenCoordinates(viewSize: viewSize)
         let radiusInPixels = position.radius * min(viewSize.width, viewSize.height)
         
-        Circle()
-            .stroke(Color.red, lineWidth: 4)
-            .frame(width: radiusInPixels * 2, height: radiusInPixels * 2)
-            .position(screenPosition)
-            .animation(.easeInOut(duration: 0.1), value: position.x)
-            .animation(.easeInOut(duration: 0.1), value: position.y)
+        // Make sure radius is reasonable (at least 40px for visibility)
+        let displayRadius = max(radiusInPixels * 2, 80)
+        
+        ZStack {
+            // Outer circle - red stroke
+            Circle()
+                .stroke(Color.red, lineWidth: 4)
+                .frame(width: displayRadius, height: displayRadius)
+            
+            // Center dot for precise position
+            Circle()
+                .fill(Color.red)
+                .frame(width: 10, height: 10)
+        }
+        .position(screenPosition)
     }
 }
 

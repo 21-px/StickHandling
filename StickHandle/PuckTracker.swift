@@ -75,6 +75,10 @@ class PuckTracker: ObservableObject {
     /// Detect the green puck in an image using color filtering
     private func detectGreenPuck(in image: CIImage, pixelBuffer: CVPixelBuffer) -> PuckPosition? {
         
+        // Store original image size before scaling
+        let originalWidth = image.extent.width
+        let originalHeight = image.extent.height
+        
         // Apply color threshold filter to isolate bright green
         guard let greenMask = createColorMask(for: image) else {
             return nil
@@ -85,8 +89,8 @@ class PuckTracker: ObservableObject {
             return nil
         }
         
-        // Find the largest green blob
-        if let detection = findLargestGreenBlob(in: cgImage) {
+        // Find the largest green blob (returns coordinates in scaled image space)
+        if let detection = findLargestGreenBlob(in: cgImage, originalSize: CGSize(width: originalWidth, height: originalHeight)) {
             return detection
         }
         
@@ -94,7 +98,7 @@ class PuckTracker: ObservableObject {
     }
     
     /// Find the largest green region in the masked image
-    private func findLargestGreenBlob(in image: CGImage) -> PuckPosition? {
+    private func findLargestGreenBlob(in image: CGImage, originalSize: CGSize) -> PuckPosition? {
         let width = image.width
         let height = image.height
         
@@ -156,7 +160,7 @@ class PuckTracker: ObservableObject {
             return nil
         }
         
-        // Calculate center of mass
+        // Calculate center of mass in scaled image space
         let centerX = sumX / CGFloat(pixelCount)
         let centerY = sumY / CGFloat(pixelCount)
         
@@ -165,10 +169,16 @@ class PuckTracker: ObservableObject {
         let bboxHeight = maxY - minY
         let radius = max(bboxWidth, bboxHeight) / 2
         
-        // Normalize coordinates (0-1)
+        // Normalize coordinates (0-1) relative to the SCALED image
         let normalizedX = centerX / CGFloat(width)
         let normalizedY = centerY / CGFloat(height)
         let normalizedRadius = CGFloat(radius) / CGFloat(min(width, height))
+        
+        // Debug: Print detection info
+        print("🎯 Detection - Width: \(width), Height: \(height)")
+        print("🎯 Center: (\(Int(centerX)), \(Int(centerY)))")
+        print("🎯 Normalized: (\(String(format: "%.2f", normalizedX)), \(String(format: "%.2f", normalizedY)))")
+        print("🎯 PixelCount: \(pixelCount)")
         
         // Calculate confidence based on:
         // 1. Number of pixels (more pixels = higher confidence)
