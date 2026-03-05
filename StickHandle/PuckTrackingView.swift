@@ -90,31 +90,34 @@ struct CameraPreview: UIViewRepresentable {
     
     let cameraManager: CameraManager
     
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
+    func makeUIView(context: Context) -> CameraPreviewUIView {
+        let view = CameraPreviewUIView()
         view.backgroundColor = .black
         
+        // Get preview layer from camera manager
         let previewLayer = cameraManager.getPreviewLayer()
-        previewLayer.frame = view.bounds
+        view.previewLayer = previewLayer
         view.layer.addSublayer(previewLayer)
-        
-        // Store layer in context to update frame later
-        context.coordinator.previewLayer = previewLayer
         
         return view
     }
     
-    func updateUIView(_ uiView: UIView, context: Context) {
+    func updateUIView(_ uiView: CameraPreviewUIView, context: Context) {
         // Update preview layer frame when view size changes
-        context.coordinator.previewLayer?.frame = uiView.bounds
+        DispatchQueue.main.async {
+            uiView.previewLayer?.frame = uiView.bounds
+        }
     }
+}
+
+/// Custom UIView that properly handles the preview layer frame
+class CameraPreviewUIView: UIView {
+    var previewLayer: AVCaptureVideoPreviewLayer?
     
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-    
-    class Coordinator {
-        var previewLayer: AVCaptureVideoPreviewLayer?
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // Ensure preview layer matches view bounds
+        previewLayer?.frame = bounds
     }
 }
 

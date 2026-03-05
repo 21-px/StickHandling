@@ -32,12 +32,23 @@ class PuckTracker: ObservableObject {
     private var lastDetectionTime = Date()
     private let detectionTimeout: TimeInterval = 0.5 // If no detection for 0.5s, mark as not tracking
     
+    // Frame throttling for performance
+    private var frameCount: Int = 0
+    private let processEveryNthFrame = 3 // Only process every 3rd frame for better performance
+    
     // Core Image context for image processing
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     
     /// Process a video frame to detect the green puck
     /// Call this for each frame from the camera
     func processFrame(_ pixelBuffer: CVPixelBuffer) {
+        // Throttle frame processing for performance
+        // Like using requestAnimationFrame with throttle in JavaScript
+        frameCount += 1
+        if frameCount % processEveryNthFrame != 0 {
+            return
+        }
+        
         // Convert pixel buffer to CIImage for processing
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         
@@ -183,9 +194,10 @@ class PuckTracker: ObservableObject {
     /// Create a binary mask highlighting green regions
     private func createColorMask(for image: CIImage) -> CIImage? {
         
-        // Convert to HSV color space for better color detection
-        // HSV is more intuitive for color ranges than RGB
-        let hsvImage = image.applyingFilter("CIColorControls", parameters: [:])
+        // Reduce image size for faster processing
+        // Scale down to 640px wide (keeps aspect ratio)
+        let scale = 640.0 / image.extent.width
+        let scaledImage = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         
         // Use CIColorCube filter to create a custom color lookup table
         // This is like writing a custom WebGL shader for color filtering
@@ -195,7 +207,7 @@ class PuckTracker: ObservableObject {
         let colorCube = CIFilter(name: "CIColorCube")
         colorCube?.setValue(cubeSize, forKey: "inputCubeDimension")
         colorCube?.setValue(cubeData, forKey: "inputCubeData")
-        colorCube?.setValue(hsvImage, forKey: kCIInputImageKey)
+        colorCube?.setValue(scaledImage, forKey: kCIInputImageKey)
         
         return colorCube?.outputImage
     }
