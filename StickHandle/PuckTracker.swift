@@ -24,13 +24,23 @@ class PuckTracker: ObservableObject {
     @Published var trackingConfidence: Float = 0.0
     @Published var debugImage: UIImage? // For showing color mask in debug mode
     
-    // Color detection parameters for bright green
+    // Color detection parameters for puck
     // HSV (Hue, Saturation, Value) is better than RGB for color detection
-    // Tuned for bright green/yellow-green puck
-    // Wider ranges for better initial detection
-    private let targetHue: (min: CGFloat, max: CGFloat) = (0.20, 0.50) // Wider green range
-    private let targetSaturation: (min: CGFloat, max: CGFloat) = (0.3, 1.0) // Lower minimum
-    private let targetBrightness: (min: CGFloat, max: CGFloat) = (0.3, 1.0) // Lower minimum
+    // These values are loaded from UserDefaults or use default green values
+    @Published var targetHue: (min: CGFloat, max: CGFloat)
+    @Published var targetSaturation: (min: CGFloat, max: CGFloat)
+    @Published var targetBrightness: (min: CGFloat, max: CGFloat)
+    
+    // UserDefaults keys for persisting color selection
+    private let hueMinKey = "com.stickhandle.puck.hue.min"
+    private let hueMaxKey = "com.stickhandle.puck.hue.max"
+    private let satMinKey = "com.stickhandle.puck.sat.min"
+    private let satMaxKey = "com.stickhandle.puck.sat.max"
+    private let brightMinKey = "com.stickhandle.puck.bright.min"
+    private let brightMaxKey = "com.stickhandle.puck.bright.max"
+    
+    // Store the current frame for color picking
+    private var currentFrame: CVPixelBuffer?
     
     // Debug mode to visualize color detection
     var debugMode: Bool = false
@@ -49,13 +59,48 @@ class PuckTracker: ObservableObject {
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false, .priorityRequestLow: false])
     
     // Cache the color cube to avoid recreating it every frame
-    private lazy var colorCubeData: Data = {
-        return createGreenColorCube()
-    }()
+    // Will be regenerated when color changes
+    private var colorCubeData: Data
+    
+    init() {
+        // Load saved color values or use defaults (bright green)
+        let defaults = UserDefaults.standard
+        
+        // Initialize all stored properties first
+        let loadedHue = (
+            min: CGFloat(defaults.double(forKey: hueMinKey)).ifZero(0.20),
+            max: CGFloat(defaults.double(forKey: hueMaxKey)).ifZero(0.50)
+        )
+        
+        let loadedSat = (
+            min: CGFloat(defaults.double(forKey: satMinKey)).ifZero(0.3),
+            max: CGFloat(defaults.double(forKey: satMaxKey)).ifZero(1.0)
+        )
+        
+        let loadedBright = (
+            min: CGFloat(defaults.double(forKey: brightMinKey)).ifZero(0.3),
+            max: CGFloat(defaults.double(forKey: brightMaxKey)).ifZero(1.0)
+        )
+        
+        // Assign to self after computing values
+        self.targetHue = loadedHue
+        self.targetSaturation = loadedSat
+        self.targetBrightness = loadedBright
+        
+        // Create initial color cube with loaded/default values
+        self.colorCubeData = Self.createColorCube(
+            hue: loadedHue,
+            saturation: loadedSat,
+            brightness: loadedBright
+        )
+    }
     
     /// Process a video frame to detect the green puck
     /// Call this for each frame from the camera
     func processFrame(_ pixelBuffer: CVPixelBuffer) {
+        // Store the current frame for potential color picking
+        currentFrame = pixelBuffer
+        
         // Throttle frame processing for performance
         frameCount += 1
         if frameCount % processEveryNthFrame != 0 {
@@ -103,6 +148,115 @@ class PuckTracker: ObservableObject {
     /// Enable or disable debug visualization
     func setDebugMode(_ enabled: Bool) {
         debugMode = enabled
+    }
+    
+    /// Extract color at a specific normalized point in the current frame
+    /// - Parameter normalizedPoint: Point in 0-1 range (x, y)
+    /// - Returns: HSV color at that point, or nil if no frame available
+    func getColorAt(normalizedPoint: CGPoint) -> (h: CGFloat, s: CGFloat, v: CGFloat)? {
+        guard let pixelBuffer = currentFrame else { return nil }
+        
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        
+        // Convert normalized coordinates to pixel coordinates
+        let x = Int(normalizedPoint.x * CGFloat(width))
+        let y = Int(normalizedPoint.y * CGFloat(height))
+        
+        // Sample a small region around the point to average out camera noise
+        // Using 3x3 grid (9 pixels) for accurate but noise-resistant sampling
+        let sampleSize = 1  // -1 to +1 = 3x3 grid
+        var rSum: CGFloat = 0
+        var gSum: CGFloat = 0
+        var bSum: CGFloat = 0
+        var sampleCount = 0
+        
+        for dy in -sampleSize...sampleSize {
+            for dx in -sampleSize...sampleSize {
+                let px = max(0, min(width - 1, x + dx))
+                let py = max(0, min(height - 1, y + dy))
+                
+                // Extract RGB values at this pixel
+                if let rgb = getPixelColor(ciImage: ciImage, x: px, y: py, width: width, height: height) {
+                    rSum += rgb.r
+                    gSum += rgb.g
+                    bSum += rgb.b
+                    sampleCount += 1
+                }
+            }
+        }
+        
+        print("📊 Sampled \(sampleCount) pixels in 3x3 grid")
+        
+        guard sampleCount > 0 else { return nil }
+        
+        let r = rSum / CGFloat(sampleCount)
+        let g = gSum / CGFloat(sampleCount)
+        let b = bSum / CGFloat(sampleCount)
+        
+        return rgbToHsv(r: r, g: g, b: b)
+    }
+    
+    /// Helper to extract RGB color from a CIImage at specific pixel
+    private func getPixelColor(ciImage: CIImage, x: Int, y: Int, width: Int, height: Int) -> (r: CGFloat, g: CGFloat, b: CGFloat)? {
+        // Create a 1x1 crop of the image at the specified pixel
+        let cropRect = CGRect(x: x, y: y, width: 1, height: 1)
+        let croppedImage = ciImage.cropped(to: cropRect)
+        
+        // Render to get pixel data
+        var bitmap = [UInt8](repeating: 0, count: 4)
+        ciContext.render(croppedImage, toBitmap: &bitmap, rowBytes: 4, bounds: cropRect, format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+        
+        return (
+            r: CGFloat(bitmap[0]) / 255.0,
+            g: CGFloat(bitmap[1]) / 255.0,
+            b: CGFloat(bitmap[2]) / 255.0
+        )
+    }
+    
+    /// Update the target color for puck detection
+    /// - Parameter hsv: The HSV color to target
+    func updateTargetColor(hsv: (h: CGFloat, s: CGFloat, v: CGFloat)) {
+        // Create a range around the selected color
+        // Wider range for hue (±0.08 or ±29°), narrower for sat/bright
+        let hueRange: CGFloat = 0.08
+        let satRange: CGFloat = 0.2
+        let brightRange: CGFloat = 0.2
+        
+        targetHue = (
+            min: max(0, hsv.h - hueRange),
+            max: min(1, hsv.h + hueRange)
+        )
+        
+        targetSaturation = (
+            min: max(0, hsv.s - satRange),
+            max: min(1, hsv.s + satRange)
+        )
+        
+        targetBrightness = (
+            min: max(0, hsv.v - brightRange),
+            max: min(1, hsv.v + brightRange)
+        )
+        
+        // Save to UserDefaults
+        let defaults = UserDefaults.standard
+        defaults.set(Double(targetHue.min), forKey: hueMinKey)
+        defaults.set(Double(targetHue.max), forKey: hueMaxKey)
+        defaults.set(Double(targetSaturation.min), forKey: satMinKey)
+        defaults.set(Double(targetSaturation.max), forKey: satMaxKey)
+        defaults.set(Double(targetBrightness.min), forKey: brightMinKey)
+        defaults.set(Double(targetBrightness.max), forKey: brightMaxKey)
+        
+        // Regenerate color cube with new values
+        colorCubeData = Self.createColorCube(
+            hue: targetHue,
+            saturation: targetSaturation,
+            brightness: targetBrightness
+        )
+        
+        print("🎨 Updated puck color to H:\(hsv.h) S:\(hsv.s) V:\(hsv.v)")
+        print("   Ranges: H[\(targetHue.min)-\(targetHue.max)] S[\(targetSaturation.min)-\(targetSaturation.max)] V[\(targetBrightness.min)-\(targetBrightness.max)]")
     }
     
     /// Detect the green puck in an image using color filtering
@@ -270,8 +424,12 @@ class PuckTracker: ObservableObject {
         return colorCube?.outputImage
     }
     
-    /// Create a color lookup table that passes through green and blacks out other colors
-    private func createGreenColorCube() -> Data {
+    /// Create a color lookup table that passes through the target color and blacks out other colors
+    private static func createColorCube(
+        hue: (min: CGFloat, max: CGFloat),
+        saturation: (min: CGFloat, max: CGFloat),
+        brightness: (min: CGFloat, max: CGFloat)
+    ) -> Data {
         let cubeSize = 64
         let cubeDataSize = cubeSize * cubeSize * cubeSize * 4 // RGBA
         var cubeData = [Float](repeating: 0, count: cubeDataSize)
@@ -286,21 +444,21 @@ class PuckTracker: ObservableObject {
                     let b = CGFloat(blue) / CGFloat(cubeSize - 1)
                     
                     // Convert RGB to HSV
-                    let hsv = rgbToHsv(r: r, g: g, b: b)
+                    let hsv = rgbToHsvStatic(r: r, g: g, b: b)
                     
-                    // Check if this color is in our green range
-                    let isGreen = hsv.h >= targetHue.min && hsv.h <= targetHue.max &&
-                                  hsv.s >= targetSaturation.min &&
-                                  hsv.v >= targetBrightness.min
+                    // Check if this color is in our target range
+                    let isTargetColor = hsv.h >= hue.min && hsv.h <= hue.max &&
+                                        hsv.s >= saturation.min && hsv.s <= saturation.max &&
+                                        hsv.v >= brightness.min && hsv.v <= brightness.max
                     
-                    if isGreen {
+                    if isTargetColor {
                         // Keep the color (white in mask)
                         cubeData[offset] = 1.0 // R
                         cubeData[offset + 1] = 1.0 // G
                         cubeData[offset + 2] = 1.0 // B
                         cubeData[offset + 3] = 1.0 // A
                     } else {
-                        // Make it black (not green)
+                        // Make it black (not target color)
                         cubeData[offset] = 0.0
                         cubeData[offset + 1] = 0.0
                         cubeData[offset + 2] = 0.0
@@ -313,6 +471,33 @@ class PuckTracker: ObservableObject {
         }
         
         return cubeData.withUnsafeBufferPointer { Data(buffer: $0) }
+    }
+    
+    /// Convert RGB to HSV color space (static version for use in static methods)
+    private static func rgbToHsvStatic(r: CGFloat, g: CGFloat, b: CGFloat) -> (h: CGFloat, s: CGFloat, v: CGFloat) {
+        let maxC = max(r, g, b)
+        let minC = min(r, g, b)
+        let delta = maxC - minC
+        
+        var h: CGFloat = 0
+        let s: CGFloat = maxC == 0 ? 0 : delta / maxC
+        let v: CGFloat = maxC
+        
+        if delta != 0 {
+            if maxC == r {
+                h = ((g - b) / delta).truncatingRemainder(dividingBy: 6)
+            } else if maxC == g {
+                h = (b - r) / delta + 2
+            } else {
+                h = (r - g) / delta + 4
+            }
+            h /= 6
+            if h < 0 {
+                h += 1
+            }
+        }
+        
+        return (h, s, v)
     }
     
     /// Convert RGB to HSV color space
@@ -340,6 +525,15 @@ class PuckTracker: ObservableObject {
         }
         
         return (h, s, v)
+    }
+}
+
+// MARK: - Helper Extensions
+
+extension CGFloat {
+    /// Return self if non-zero, otherwise return the provided default
+    func ifZero(_ defaultValue: CGFloat) -> CGFloat {
+        return self == 0 ? defaultValue : self
     }
 }
 
