@@ -10,9 +10,22 @@
 		8FD1C98B2F57DCC400840661 /* StickHandle.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StickHandle.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		8FE7914C2F5A859A0094B32F /* Exceptions for "StickHandle" folder in "StickHandle" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				POTENTIAL_FEATURES.md,
+			);
+			target = 8FD1C98A2F57DCC400840661 /* StickHandle */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		8FD1C98D2F57DCC400840661 /* StickHandle */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				8FE7914C2F5A859A0094B32F /* Exceptions for "StickHandle" folder in "StickHandle" target */,
+			);
 			path = StickHandle;
 			sourceTree = "<group>";
 		};

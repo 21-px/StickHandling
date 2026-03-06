@@ -24,20 +24,33 @@ func findNearbyLocations(from location: CLLocation, radius: Double) -> [PointOfI
 
 ## General Guidelines
 
-### 1. Do Not Build or Edit Tests
+### 1. Do Not Create .md Files for Explanations
+- **Do not create markdown files to explain what you're doing** unless explicitly requested
+- Only use .md files when the developer asks, or if you need it for context on long running tasks
+- Keep explanations in chat responses instead of creating documentation files
+- Focus on code changes, not documentation generation
+
+### 2. Always Verify No Build Errors
+- **Double check that there will be no build errors** after completing tasks
+- Verify all method calls exist before using them
+- Ensure all properties are declared in the correct classes
+- Check that all types are properly defined and imported
+- Confirm syntax is correct before finishing
+
+### 3. Do Not Build or Edit Tests
 - **Do not create test files** unless explicitly requested
 - **Do not modify existing test files** 
 - Focus on production code only
 - Testing will be handled separately by the developer
 
-### 2. Reuse Existing Functionality
+### 4. Reuse Existing Functionality
 - **Always check if functionality already exists** before creating new code
 - Search the codebase for similar functions, views, or utilities
 - Extend or refactor existing code rather than duplicating
 - If you find existing functionality, reference it and ask if it should be reused
 - DRY principle: Don't Repeat Yourself
 
-### 3. Explain iOS/Swift Concepts
+### 5. Explain iOS/Swift Concepts
 When introducing iOS/Swift concepts, provide brief explanations:
 - **SwiftUI**: Like React - declarative UI framework
 - **@State**: Like React's useState - local component state
@@ -48,13 +61,13 @@ When introducing iOS/Swift concepts, provide brief explanations:
 - **View Protocol**: Like React component interface
 - **Modifiers**: Like CSS or method chaining for styling
 
-### 4. Code Organization
+### 6. Code Organization
 - Keep views small and composable (like React components)
 - Extract reusable components into separate files
 - Use meaningful file and function names
 - Group related functionality together
 
-### 5. Prefer Modern Swift
+### 7. Prefer Modern Swift
 - Use Swift Concurrency (async/await) over older patterns
 - Use SwiftUI over UIKit when possible
 - Use native Apple frameworks and APIs

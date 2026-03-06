@@ -36,42 +36,221 @@ Like using JavaScript's Canvas API or WebRTC with TensorFlow.js for object detec
 
 ---
 
-### Phase 2: AR Course Setup & Navigation
-**Goal**: Use AR to show users where to place physical obstacles and track puck navigation through the course
+### Phase 2: AR Course Setup & Line-Based Navigation
+**Goal**: Use AR to show users where cross-lines are placed and validate puck movement through the course
 
 #### Technical Components
 - **Framework**: ARKit for spatial tracking and plane detection
 - **Plane Detection**: Horizontal plane detection for floor mapping
-- **Virtual Markers**: 3D objects/indicators showing obstacle placement
-- **Course Definition**: Data models for course layouts and obstacle positions
-- **Validation**: Check if obstacles are placed correctly
-- **Navigation Logic**: Determine if puck follows the correct path
+- **Course System**: Line-based course definition with cross-lines perpendicular to movement
+- **Virtual Lines**: AR visualization showing glowing lines on floor that must be crossed
+- **Course Definition**: Data models for line-based courses (start, end, direction)
+- **Line Crossing Detection**: Validate when puck crosses lines in correct order/direction
+- **Coordinate Transform**: Map 2D puck tracking to 3D AR world space
+
+#### Course Element Types
+```swift
+enum CourseElement {
+    case checkpoint(position: Vector3, radius: Float)        // Start/finish points
+    case crossLine(start: Vector3, end: Vector3, direction: CrossDirection)  // Lines to cross
+}
+
+enum CrossDirection {
+    case forward, backward, leftToRight, rightToLeft, any
+}
+```
+
+#### Why Line-Based?
+- ✅ **No corner-cutting** - Must physically cross each line
+- ✅ **Works for any shape** - Zigzags, circles, figure-8s all use same elements
+- ✅ **Minimal elements** - 4-6 lines define complex courses
+- ✅ **Easy AR visualization** - Draw glowing lines on floor
+- ✅ **Direction enforcement** - Can require specific crossing direction
+- ✅ **Real training analog** - Like agility cones, timing gates, slalom poles
+
+#### Example Courses
+
+**Beginner - Simple Zigzag:**
+- Checkpoint (start) → 3 cross-lines → Checkpoint (finish)
+- Lines placed perpendicular to forward movement
+
+**Intermediate - Circle Course:**
+- 8 radial lines emanating from center point
+- Must cross all 8 in clockwise order
+- Teaches smooth circular stickhandling
+
+**Expert - Figure-8:**
+- Two circles connected by crossing lines
+- Requires tight directional changes
+- Fast time limit
 
 #### Key Files to Create
-- `ARCourseView.swift` - Main AR view for course setup
-- `Course.swift` - Model defining course structure
-- `Obstacle.swift` - Model for obstacle types and positions
-- `CourseValidator.swift` - Validates correct course setup
-- `NavigationTracker.swift` - Tracks puck movement through course checkpoints
+- `ARCourseView.swift` - Main AR view for course visualization
+- `Course.swift` - Course data model with line-based elements
+- `CourseElement.swift` - Enum for checkpoint vs crossLine types
+- `CourseValidator.swift` - Validates line crossings in correct order/direction
+- `LineCrossingDetector.swift` - Geometric intersection logic for line crosses
+- `ARLineRenderer.swift` - Renders glowing lines in AR space
+- `CoordinateMapper.swift` - Maps 2D puck position to 3D AR space
 - `CourseRepository.swift` - Stores and retrieves course definitions
 
+#### Line Crossing Validation Logic
+```swift
+func checkLineCross(from: Vector3, to: Vector3, line: CrossLine) -> Bool {
+    // 1. Check if puck path intersects line segment
+    if segmentsIntersect(a1: from, a2: to, b1: line.start, b2: line.end) {
+        // 2. Verify crossing direction (if required)
+        if line.direction != .any {
+            let crossDirection = determineCrossDirection(from, to, line)
+            return crossDirection == line.direction
+        }
+        return true
+    }
+    return false
+}
+```
+
 #### Similar Web Concept
-Like using WebXR or AR.js to place 3D objects in real space, with a predefined "level map" structure.
+Like using WebXR or AR.js to place 3D objects in real space, combined with 2D line intersection algorithms (like game hitbox detection).
 
 #### Dependencies
 - ARKit
 - RealityKit (for 3D rendering)
 - Combine (for reactive updates)
+- SceneKit (for line rendering)
 
 ---
 
-### Phase 3: Audio Feedback & Voice Control
+### Phase 3: Puck Occlusion Handling
+**Goal**: Maintain tracking accuracy when puck is temporarily obstructed by hockey stick or hand
+
+#### Technical Components
+- **Temporal Smoothing**: Track position history to predict during occlusion
+- **Velocity-Based Prediction**: Estimate puck position based on recent movement
+- **Obstruction Tolerance**: Allow brief detection gaps without losing tracking
+- **Smart Interpolation**: Fill gaps between last known and newly detected positions
+- **Course-Aware Logic**: For line-based courses, only validate positions before/after obstruction
+
+#### Why This Is Critical
+Hockey stickhandling requires the stick to frequently pass over/near the puck, causing:
+- Brief detection loss (0.1-0.3 seconds)
+- Partial occlusion (puck partially visible)
+- Rapid movement that's hard to track
+
+#### Occlusion Handling Strategy
+
+**Scenario 1: Brief Obstruction (< 0.1s)**
+- Use last known position
+- No prediction needed
+- Resume tracking when puck reappears
+
+**Scenario 2: Stick Drag (0.1-0.3s)**
+- Predict position using velocity from last 3-5 frames
+- Show predicted position with lower confidence
+- Validate line crossing using interpolated path
+
+**Scenario 3: Extended Obstruction (> 0.3s)**
+- Mark as "tracking lost"
+- Pause course timer (optional)
+- Resume when puck reappears
+
+**Key Insight for Line-Based Courses:**
+You only need to know:
+1. Position **before** line
+2. Position **after** line
+3. Did the path cross the line?
+
+Brief obstruction **during** crossing is acceptable!
+
+#### Key Files to Create/Modify
+- `PuckTracker.swift` (modify) - Add position history and prediction
+- `PositionPredictor.swift` - Velocity-based position estimation
+- `OcclusionDetector.swift` - Detect and classify occlusion events
+- `PositionHistory.swift` - Circular buffer of recent positions
+- `PathInterpolator.swift` - Interpolate path between known positions
+
+#### Algorithm Overview
+```swift
+class PuckTracker {
+    private var positionHistory: [PuckPosition] = []  // Last 10 positions
+    private var lastValidDetection: Date = Date()
+    private let obstructionTolerance: TimeInterval = 0.3
+    
+    func processFrame() {
+        if let detected = detectPuck() {
+            // Valid detection
+            positionHistory.append(detected)
+            lastValidDetection = Date()
+            publishPosition(detected)
+        } else {
+            // No detection - possibly obstructed
+            let gapDuration = Date().timeIntervalSince(lastValidDetection)
+            
+            if gapDuration < obstructionTolerance {
+                // Predict position
+                if let predicted = predictPosition() {
+                    publishPosition(predicted, confidence: 0.7)
+                }
+            } else {
+                // Lost tracking
+                publishTrackingLost()
+            }
+        }
+    }
+    
+    func predictPosition() -> PuckPosition? {
+        guard positionHistory.count >= 3 else { return positionHistory.last }
+        
+        let velocity = calculateVelocity(from: positionHistory.suffix(3))
+        let lastPos = positionHistory.last!
+        let timeDelta = Date().timeIntervalSince(lastValidDetection)
+        
+        return PuckPosition(
+            x: lastPos.x + velocity.x * timeDelta,
+            y: lastPos.y + velocity.y * timeDelta,
+            confidence: lastPos.confidence * 0.7
+        )
+    }
+}
+```
+
+#### Validation with Occlusion
+```swift
+class CourseValidator {
+    func checkLineCross(currentPosition: Vector3?, previousPosition: Vector3?) {
+        // Even if some frames were missed due to obstruction,
+        // we can still validate if the line was crossed
+        
+        if let prev = previousPosition, let curr = currentPosition {
+            if didCrossLine(from: prev, to: curr, line: currentLine) {
+                markLineCompleted()
+            }
+        }
+    }
+}
+```
+
+#### Similar Web Concept
+Like Kalman filtering used in video games for smoothing player movement, or predictive algorithms in video conferencing when packets are dropped.
+
+#### Dependencies
+- Foundation (for date/time calculations)
+- Accelerate (for vector math if needed)
+
+#### Performance Considerations
+- Keep history size small (5-10 frames)
+- Prediction should be lightweight (< 1ms)
+- Only predict during active course runs
+
+---
+
+### Phase 4: Audio Feedback & Voice Control
 **Goal**: Provide real-time audio announcements and hands-free voice commands
 
 #### Technical Components
 - **Text-to-Speech**: AVSpeechSynthesizer for announcements
 - **Speech Recognition**: Speech framework for voice commands
-- **Audio Cues**: Sound effects for events (checkpoint reached, time warnings)
+- **Audio Cues**: Sound effects for events (line crossed, time warnings)
 - **Background Audio**: Proper audio session configuration
 - **Commands**: "Start", "Stop", "Restart", "Pause", etc.
 
@@ -94,7 +273,7 @@ Like using the Web Speech API for speech recognition and synthesis.
 
 ---
 
-### Phase 4: Duolingo-Style Course Structure
+### Phase 5: Duolingo-Style Course Structure
 **Goal**: Create a progressive learning system with difficulty levels, streaks, and daily challenges
 
 #### Technical Components
@@ -139,7 +318,7 @@ Like a React app with Redux/Context for state management, localStorage for persi
 
 ---
 
-### Phase 5: Leaderboards
+### Phase 6: Leaderboards
 **Goal**: Enable competition through global and friend leaderboards
 
 #### Technical Components
@@ -173,7 +352,7 @@ Like making REST API calls with fetch/axios and displaying data in a sorted tabl
 
 ---
 
-### Phase 6: Signup & Authentication
+### Phase 7: Signup & Authentication
 **Goal**: User account creation and authentication
 
 #### Technical Components
@@ -208,7 +387,7 @@ Like implementing OAuth, JWT authentication with React forms, and using localSto
 
 ---
 
-### Phase 7: Invite/Referral System
+### Phase 8: Invite/Referral System
 **Goal**: Viral growth through user invitations
 
 #### Technical Components
@@ -239,7 +418,7 @@ Like using the Web Share API or social share buttons, with UTM parameters for tr
 
 ---
 
-### Phase 8: Push Notifications
+### Phase 9: Push Notifications
 **Goal**: Re-engage users with daily reminders and achievements
 
 #### Technical Components
@@ -275,7 +454,7 @@ Like using service workers for push notifications on web, with notification perm
 
 ---
 
-### Phase 9: App Store Review Prompt
+### Phase 10: App Store Review Prompt
 **Goal**: Encourage positive App Store reviews at optimal moments
 
 #### Technical Components
@@ -303,7 +482,7 @@ Like showing a modal asking for feedback after positive user actions.
 
 ---
 
-### Phase 10: Logging & Analytics
+### Phase 11: Logging & Analytics
 **Goal**: Track usage, errors, and user behavior for improvement
 
 #### Technical Components
@@ -513,15 +692,16 @@ StickHandle/
 ## Development Order Recommendations
 
 ### Why This Order?
-1. **Phase 1 (Tracking)** - Core tech that everything else depends on
-2. **Phase 2 (AR)** - Extends tracking with actual course gameplay
-3. **Phase 3 (Audio)** - Improves UX of gameplay
-4. **Phase 4 (Progression)** - Makes it a game, not just a tech demo
-5. **Phase 5-10** - Growth and retention features
+1. **Phase 1 (Tracking)** - Core tech that everything else depends on ✅ COMPLETE
+2. **Phase 2 (AR Lines)** - Extends tracking with line-based course gameplay
+3. **Phase 3 (Occlusion)** - Handles real-world stick obstruction
+4. **Phase 4 (Audio)** - Improves UX of gameplay
+5. **Phase 5 (Progression)** - Makes it a game, not just a tech demo
+6. **Phase 6-11** - Growth and retention features
 
 ### MVP (Minimum Viable Product)
-Phases 1-4 create a functional, engaging app that users can enjoy.
-Phases 5-10 add growth, monetization, and polish.
+**Phases 1-5** create a functional, engaging app that users can enjoy.
+**Phases 6-11** add growth, monetization, and polish.
 
 ### Potential Shortcuts
 - Use Game Center instead of custom leaderboard (saves backend work)

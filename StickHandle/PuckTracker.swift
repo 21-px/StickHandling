@@ -22,12 +22,18 @@ class PuckTracker: ObservableObject {
     @Published var puckPosition: PuckPosition?
     @Published var isTracking: Bool = false
     @Published var trackingConfidence: Float = 0.0
+    @Published var debugImage: UIImage? // For showing color mask in debug mode
     
     // Color detection parameters for bright green
     // HSV (Hue, Saturation, Value) is better than RGB for color detection
-    private let targetHue: (min: CGFloat, max: CGFloat) = (0.25, 0.45) // Green hue range (0-1 scale)
-    private let targetSaturation: (min: CGFloat, max: CGFloat) = (0.4, 1.0) // Bright/vivid colors
-    private let targetBrightness: (min: CGFloat, max: CGFloat) = (0.4, 1.0) // Not too dark
+    // Tuned for bright green/yellow-green puck
+    // Wider ranges for better initial detection
+    private let targetHue: (min: CGFloat, max: CGFloat) = (0.20, 0.50) // Wider green range
+    private let targetSaturation: (min: CGFloat, max: CGFloat) = (0.3, 1.0) // Lower minimum
+    private let targetBrightness: (min: CGFloat, max: CGFloat) = (0.3, 1.0) // Lower minimum
+    
+    // Debug mode to visualize color detection
+    var debugMode: Bool = false
     
     private var lastDetectionTime = Date()
     private let detectionTimeout: TimeInterval = 0.5 // If no detection for 0.5s, mark as not tracking
@@ -56,6 +62,11 @@ class PuckTracker: ObservableObject {
             return
         }
         
+        // Log every 30th frame to confirm processing is happening
+        if frameCount % 30 == 0 {
+            print("📹 PuckTracker: Processing frame \(frameCount)")
+        }
+        
         // Process on background queue to avoid blocking main thread
         processingQueue.async { [weak self] in
             guard let self = self else { return }
@@ -70,6 +81,11 @@ class PuckTracker: ObservableObject {
                     self.isTracking = true
                     self.trackingConfidence = position.confidence
                     self.lastDetectionTime = Date()
+                    
+                    // Log first detection
+                    if self.frameCount % 30 == 0 {
+                        print("✅ Puck detected at (\(position.x), \(position.y)) confidence: \(position.confidence)")
+                    }
                 }
             } else {
                 // Check if we've lost tracking
@@ -84,6 +100,11 @@ class PuckTracker: ObservableObject {
         }
     }
     
+    /// Enable or disable debug visualization
+    func setDebugMode(_ enabled: Bool) {
+        debugMode = enabled
+    }
+    
     /// Detect the green puck in an image using color filtering
     private func detectGreenPuck(in image: CIImage, pixelBuffer: CVPixelBuffer) -> PuckPosition? {
         
@@ -94,6 +115,15 @@ class PuckTracker: ObservableObject {
         // Apply color threshold filter to isolate bright green
         guard let greenMask = createColorMask(for: image) else {
             return nil
+        }
+        
+        // In debug mode, convert mask to UIImage for visualization
+        if debugMode {
+            if let cgImage = ciContext.createCGImage(greenMask, from: greenMask.extent) {
+                DispatchQueue.main.async {
+                    self.debugImage = UIImage(cgImage: cgImage)
+                }
+            }
         }
         
         // Convert mask to CGImage to analyze pixel data
@@ -175,8 +205,8 @@ class PuckTracker: ObservableObject {
         }
         
         // Need at least some pixels to consider it a detection
-        // Lower threshold since we're downsampling aggressively
-        let minPixels = 25 // Minimum number of sampled green pixels
+        // Very low threshold since we're downsampling aggressively (3x3 = 9x reduction)
+        let minPixels = 10 // Very low threshold for initial detection
         guard pixelCount > minPixels else {
             return nil
         }
@@ -203,8 +233,13 @@ class PuckTracker: ObservableObject {
         let isCircular = aspectRatio > 0.6 && aspectRatio < 1.4
         let isReasonableSize = normalizedRadius > 0.03 && normalizedRadius < 0.4
         
-        // Confidence based on pixel count and shape
-        let pixelConfidence = min(Float(pixelCount) / 5000.0, 1.0) // More pixels = more confident
+        // Adjust confidence calculation for downsampled pixels
+        // Since we're sampling every 3rd pixel on 160px image, scale up the count
+        let samplingFactor: Float = Float(sampleStep * sampleStep) // 9x undercount due to sampling
+        let adjustedPixelCount = Float(pixelCount) * samplingFactor
+        
+        // Confidence based on adjusted pixel count and shape
+        let pixelConfidence = min(adjustedPixelCount / 2000.0, 1.0) // More pixels = more confident
         let shapeConfidence: Float = isCircular && isReasonableSize ? 1.0 : 0.5
         let confidence = pixelConfidence * shapeConfidence
         
@@ -319,10 +354,65 @@ struct PuckPosition {
     let confidence: Float // Confidence score 0-1
     
     /// Convert normalized coordinates to screen coordinates
-    func toScreenCoordinates(viewSize: CGSize) -> CGPoint {
+    /// - Parameter viewSize: The size of the view (in screen coordinates)
+    /// - Parameter orientation: The device orientation (for ARKit coordinate transformation)
+    /// - Returns: Screen position in points
+    ///
+    /// **Coordinate Transformation for ARKit:**
+    /// ARKit camera frames are in landscape-right (camera sensor orientation).
+    /// When device is in portrait, we need to rotate coordinates:
+    ///
+    /// ```
+    /// Landscape-Right Frame:        Portrait Screen:
+    ///   (0,0)──────(1,0)              (0,0)──────(1,0)
+    ///     │          │                  │          │
+    ///     │   CAM    │                  │  VIEW   │
+    ///     │          │                  │          │
+    ///   (0,1)──────(1,1)              (0,1)──────(1,1)
+    ///
+    /// Transformation: adjustedX = y, adjustedY = 1.0 - x
+    /// - Landscape top (y=0) → Portrait left (x=0)
+    /// - Landscape bottom (y=1) → Portrait right (x=1)
+    /// - Landscape left (x=0) → Portrait bottom (y=1)
+    /// - Landscape right (x=1) → Portrait top (y=0)
+    /// ```
+    func toScreenCoordinates(
+        viewSize: CGSize,
+        transformForARKit: Bool = false,
+        orientation: UIDeviceOrientation = .portrait
+    ) -> CGPoint {
+        var adjustedX = x
+        var adjustedY = y
+        
+        // Only transform if using ARKit frames
+        if transformForARKit {
+            // Transform coordinates based on device orientation
+            if orientation == .portrait || orientation == .unknown {
+                // ARKit landscape-right → Portrait display
+                // Based on observed behavior:
+                // - Puck up (y↓) → Circle left (x↓)
+                // - Puck down (y↑) → Circle right (x↑)
+                // - Puck right (x↑) → Circle up (y↓)
+                // - Puck left (x↓) → Circle down (y↑)
+                // This is: adjustedX = 1-y, adjustedY = x
+                adjustedX = 1.0 - y
+                adjustedY = x
+            } else if orientation == .portraitUpsideDown {
+                // Rotate 180° from portrait
+                adjustedX = y
+                adjustedY = 1.0 - x
+            } else if orientation == .landscapeLeft {
+                // Rotate 180° from landscape-right
+                adjustedX = 1.0 - x
+                adjustedY = 1.0 - y
+            }
+            // If landscapeRight, no transformation needed (matches ARKit camera sensor)
+        }
+        // If not transformForARKit, coordinates are already correct (from CameraManager)
+        
         return CGPoint(
-            x: x * viewSize.width,
-            y: y * viewSize.height
+            x: adjustedX * viewSize.width,
+            y: adjustedY * viewSize.height
         )
     }
 }

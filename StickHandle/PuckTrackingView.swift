@@ -17,6 +17,8 @@ struct PuckTrackingView: View {
     
     @StateObject private var cameraManager = CameraManager()
     @StateObject private var puckTracker = PuckTracker()
+    @State private var showDebugMask = false
+    @Environment(\.dismiss) var dismiss
     
     var body: some View {
         GeometryReader { geometry in
@@ -24,6 +26,15 @@ struct PuckTrackingView: View {
                 // Camera preview layer
                 CameraPreview(cameraManager: cameraManager)
                     .edgesIgnoringSafeArea(.all)
+                
+                // Debug mask overlay (if enabled)
+                if showDebugMask, let debugImage = puckTracker.debugImage {
+                    Image(uiImage: debugImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .opacity(0.5)
+                        .edgesIgnoringSafeArea(.all)
+                }
                 
                 // Puck tracking overlay
                 if let puckPosition = puckTracker.puckPosition {
@@ -58,13 +69,48 @@ struct PuckTrackingView: View {
                 
                 // Status overlay (top of screen)
                 VStack {
-                    TrackingStatusView(
-                        isTracking: puckTracker.isTracking,
-                        confidence: puckTracker.trackingConfidence
-                    )
-                    .padding()
-                    .background(Color.black.opacity(0.5))
-                    .cornerRadius(10)
+                    HStack {
+                        // Back button to return to AR Course
+                        Button(action: {
+                            dismiss()
+                        }) {
+                            VStack(spacing: 4) {
+                                Image(systemName: "arrow.left.circle.fill")
+                                    .font(.title2)
+                                Text("Back")
+                                    .font(.caption2)
+                            }
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.green.opacity(0.6))
+                            .cornerRadius(10)
+                        }
+                        
+                        Spacer()
+                        
+                        TrackingStatusView(
+                            isTracking: puckTracker.isTracking,
+                            confidence: puckTracker.trackingConfidence
+                        )
+                        .padding()
+                        .background(Color.black.opacity(0.5))
+                        .cornerRadius(10)
+                        
+                        Spacer()
+                        
+                        // Debug toggle button
+                        Button(action: {
+                            showDebugMask.toggle()
+                            puckTracker.setDebugMode(showDebugMask)
+                        }) {
+                            Image(systemName: showDebugMask ? "eye.fill" : "eye.slash.fill")
+                                .font(.title2)
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Color.black.opacity(0.5))
+                                .cornerRadius(10)
+                        }
+                    }
                     .padding()
                     
                     Spacer()
@@ -135,35 +181,6 @@ class CameraPreviewUIView: UIView {
         super.layoutSubviews()
         // Ensure preview layer matches view bounds
         previewLayer?.frame = bounds
-    }
-}
-
-// MARK: - Puck Overlay
-
-/// Red circle that shows where the puck is detected
-struct PuckOverlay: View {
-    let position: PuckPosition
-    let viewSize: CGSize
-    
-    var body: some View {
-        let screenPosition = position.toScreenCoordinates(viewSize: viewSize)
-        let radiusInPixels = position.radius * min(viewSize.width, viewSize.height)
-        
-        // Make sure radius is reasonable (at least 40px for visibility)
-        let displayRadius = max(radiusInPixels * 2, 80)
-        
-        ZStack {
-            // Outer circle - red stroke
-            Circle()
-                .stroke(Color.red, lineWidth: 4)
-                .frame(width: displayRadius, height: displayRadius)
-            
-            // Center dot for precise position
-            Circle()
-                .fill(Color.red)
-                .frame(width: 10, height: 10)
-        }
-        .position(screenPosition)
     }
 }
 
