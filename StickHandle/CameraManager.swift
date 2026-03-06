@@ -160,7 +160,9 @@ class CameraManager: NSObject, ObservableObject {
     /// Get the capture session for preview layer (used by the view)
     func getPreviewLayer() -> AVCaptureVideoPreviewLayer {
         let previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
-        previewLayer.videoGravity = .resizeAspectFill
+        // Use .resizeAspect to show the full camera frame without cropping
+        // This ensures tracking coordinates match what's visible in the preview
+        previewLayer.videoGravity = .resizeAspect
         return previewLayer
     }
 }
