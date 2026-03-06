@@ -15,6 +15,7 @@ import UIKit
 import Combine
 
 /// Tracks a bright green puck in video frames using color-based detection
+@MainActor
 class PuckTracker: ObservableObject {
     
     // Published property so SwiftUI views can react to puck position changes
@@ -40,27 +41,27 @@ class PuckTracker: ObservableObject {
     private let brightMaxKey = "com.stickhandle.puck.bright.max"
     
     // Store the current frame for color picking
-    private var currentFrame: CVPixelBuffer?
+    nonisolated(unsafe) private var currentFrame: CVPixelBuffer?
     
     // Debug mode to visualize color detection
-    var debugMode: Bool = false
+    nonisolated(unsafe) var debugMode: Bool = false
     
-    private var lastDetectionTime = Date()
+    nonisolated(unsafe) private var lastDetectionTime = Date()
     private let detectionTimeout: TimeInterval = 0.5 // If no detection for 0.5s, mark as not tracking
     
     // Frame throttling for performance
-    private var frameCount: Int = 0
+    nonisolated(unsafe) private var frameCount: Int = 0
     private let processEveryNthFrame = 1 // Process every frame now that we've optimized
     
     // Processing queue for background work
-    private let processingQueue = DispatchQueue(label: "com.stickhandle.processing", qos: .userInitiated)
+    nonisolated(unsafe) private let processingQueue = DispatchQueue(label: "com.stickhandle.processing", qos: .userInitiated)
     
     // Core Image context for image processing (reuse for efficiency)
-    private let ciContext = CIContext(options: [.useSoftwareRenderer: false, .priorityRequestLow: false])
+    nonisolated(unsafe) private let ciContext = CIContext(options: [.useSoftwareRenderer: false, .priorityRequestLow: false])
     
     // Cache the color cube to avoid recreating it every frame
     // Will be regenerated when color changes
-    private var colorCubeData: Data
+    nonisolated(unsafe) private var colorCubeData: Data
     
     init() {
         // Load saved color values or use defaults (bright green)
@@ -97,7 +98,7 @@ class PuckTracker: ObservableObject {
     
     /// Process a video frame to detect the green puck
     /// Call this for each frame from the camera
-    func processFrame(_ pixelBuffer: CVPixelBuffer) {
+    nonisolated func processFrame(_ pixelBuffer: CVPixelBuffer) {
         // Store the current frame for potential color picking
         currentFrame = pixelBuffer
         
@@ -121,7 +122,8 @@ class PuckTracker: ObservableObject {
             
             // Detect green regions in the image
             if let position = self.detectGreenPuck(in: ciImage, pixelBuffer: pixelBuffer) {
-                DispatchQueue.main.async {
+                Task { @MainActor [weak self] in
+                    guard let self = self else { return }
                     self.puckPosition = position
                     self.isTracking = true
                     self.trackingConfidence = position.confidence
@@ -136,7 +138,8 @@ class PuckTracker: ObservableObject {
                 // Check if we've lost tracking
                 let timeSinceLastDetection = Date().timeIntervalSince(self.lastDetectionTime)
                 if timeSinceLastDetection > self.detectionTimeout {
-                    DispatchQueue.main.async {
+                    Task { @MainActor [weak self] in
+                        guard let self = self else { return }
                         self.isTracking = false
                         self.trackingConfidence = 0.0
                     }
@@ -199,7 +202,7 @@ class PuckTracker: ObservableObject {
     }
     
     /// Helper to extract RGB color from a CIImage at specific pixel
-    private func getPixelColor(ciImage: CIImage, x: Int, y: Int, width: Int, height: Int) -> (r: CGFloat, g: CGFloat, b: CGFloat)? {
+    nonisolated private func getPixelColor(ciImage: CIImage, x: Int, y: Int, width: Int, height: Int) -> (r: CGFloat, g: CGFloat, b: CGFloat)? {
         // Create a 1x1 crop of the image at the specified pixel
         let cropRect = CGRect(x: x, y: y, width: 1, height: 1)
         let croppedImage = ciImage.cropped(to: cropRect)
@@ -260,7 +263,7 @@ class PuckTracker: ObservableObject {
     }
     
     /// Detect the green puck in an image using color filtering
-    private func detectGreenPuck(in image: CIImage, pixelBuffer: CVPixelBuffer) -> PuckPosition? {
+    nonisolated private func detectGreenPuck(in image: CIImage, pixelBuffer: CVPixelBuffer) -> PuckPosition? {
         
         // Store original image size before scaling
         let originalWidth = image.extent.width
@@ -274,8 +277,8 @@ class PuckTracker: ObservableObject {
         // In debug mode, convert mask to UIImage for visualization
         if debugMode {
             if let cgImage = ciContext.createCGImage(greenMask, from: greenMask.extent) {
-                DispatchQueue.main.async {
-                    self.debugImage = UIImage(cgImage: cgImage)
+                Task { @MainActor [weak self] in
+                    self?.debugImage = UIImage(cgImage: cgImage)
                 }
             }
         }
@@ -294,7 +297,7 @@ class PuckTracker: ObservableObject {
     }
     
     /// Find the largest green region in the masked image
-    private func findLargestGreenBlob(in image: CGImage, originalSize: CGSize) -> PuckPosition? {
+    nonisolated private func findLargestGreenBlob(in image: CGImage, originalSize: CGSize) -> PuckPosition? {
         let width = image.width
         let height = image.height
         
@@ -406,7 +409,7 @@ class PuckTracker: ObservableObject {
     }
     
     /// Create a binary mask highlighting green regions
-    private func createColorMask(for image: CIImage) -> CIImage? {
+    nonisolated private func createColorMask(for image: CIImage) -> CIImage? {
         
         // Reduce image size even MORE for maximum speed
         // Scale down to 160px wide - much faster, still accurate enough for tracking
@@ -501,7 +504,7 @@ class PuckTracker: ObservableObject {
     }
     
     /// Convert RGB to HSV color space
-    private func rgbToHsv(r: CGFloat, g: CGFloat, b: CGFloat) -> (h: CGFloat, s: CGFloat, v: CGFloat) {
+    nonisolated private func rgbToHsv(r: CGFloat, g: CGFloat, b: CGFloat) -> (h: CGFloat, s: CGFloat, v: CGFloat) {
         let maxC = max(r, g, b)
         let minC = min(r, g, b)
         let delta = maxC - minC
