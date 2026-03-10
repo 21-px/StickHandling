@@ -6,8 +6,8 @@
 //
 
 /// Input: CVPixelBuffer (video frame from camera), target color (HSV range for bright green)
-/// Transformation: Uses Vision framework to detect green color regions, finds largest contiguous green area (the puck), tracks center point and size
-/// Output: PuckPosition struct with normalized coordinates (0-1 range for x, y) and confidence score, or nil if no puck detected
+/// Transformation: Uses color filtering to detect green regions (color blobs), finds center of mass and size. Works at long distances by accepting any green blob above minimum size threshold.
+/// Output: PuckPosition struct with normalized coordinates (0-1 range for x, y) and confidence score based on blob size, or nil if no puck detected
 
 import Vision
 import CoreImage
@@ -297,6 +297,9 @@ class PuckTracker: ObservableObject {
     }
     
     /// Find the largest green region in the masked image
+    /// Input: CGImage (binary mask where white = green puck pixels), original image size
+    /// Transformation: Analyzes pixel distribution, calculates center of mass, checks if blob is reasonable size
+    /// Output: PuckPosition with normalized coordinates and confidence based on blob size and shape
     nonisolated private func findLargestGreenBlob(in image: CGImage, originalSize: CGSize) -> PuckPosition? {
         let width = image.width
         let height = image.height
@@ -362,8 +365,9 @@ class PuckTracker: ObservableObject {
         }
         
         // Need at least some pixels to consider it a detection
-        // Very low threshold since we're downsampling aggressively (3x3 = 9x reduction)
-        let minPixels = 10 // Very low threshold for initial detection
+        // EXTREMELY low threshold for maximum distance tracking
+        // At far distances on 160px image, puck might be just 1-2 pixels after sampling
+        let minPixels = 1 // Absolute minimum - will detect even single-pixel blobs
         guard pixelCount > minPixels else {
             return nil
         }
@@ -382,23 +386,56 @@ class PuckTracker: ObservableObject {
         let normalizedY = centerY / CGFloat(height)
         let normalizedRadius = CGFloat(radius) / CGFloat(min(width, height))
         
-        // Calculate confidence based on:
-        // 1. Number of pixels (more pixels = higher confidence)
-        // 2. Aspect ratio (circular = higher confidence)
-        // 3. Reasonable size
-        let aspectRatio = CGFloat(bboxWidth) / CGFloat(bboxHeight)
-        let isCircular = aspectRatio > 0.6 && aspectRatio < 1.4
-        let isReasonableSize = normalizedRadius > 0.03 && normalizedRadius < 0.4
+        // SIMPLIFIED CONFIDENCE CALCULATION FOR DISTANCE TRACKING
+        // At distance, downscaling makes pucks lose circular shape, so we just check:
+        // 1. Blob is reasonable size (not too tiny = noise, not too huge = not puck)
+        // 2. Has enough pixels to be real
         
-        // Adjust confidence calculation for downsampled pixels
-        // Since we're sampling every 3rd pixel on 160px image, scale up the count
-        let samplingFactor: Float = Float(sampleStep * sampleStep) // 9x undercount due to sampling
-        let adjustedPixelCount = Float(pixelCount) * samplingFactor
+        // EXTREMELY permissive size range for maximum distance tracking
+        let minReasonableSize: CGFloat = 0.00001 // Essentially no minimum - allows tiny distant pucks
+        let maxReasonableSize: CGFloat = 0.5     // Larger max - allows close pucks
+        let isReasonableSize = normalizedRadius >= minReasonableSize && normalizedRadius <= maxReasonableSize
         
-        // Confidence based on adjusted pixel count and shape
-        let pixelConfidence = min(adjustedPixelCount / 2000.0, 1.0) // More pixels = more confident
-        let shapeConfidence: Float = isCircular && isReasonableSize ? 1.0 : 0.5
-        let confidence = pixelConfidence * shapeConfidence
+        guard isReasonableSize else {
+            return nil // Filter out noise (too small) or false positives (too large)
+        }
+        
+        // Calculate confidence based on size
+        // Optimal size is around 0.05-0.15 (medium distance)
+        // But we accept anything from minReasonableSize to maxReasonableSize
+        let optimalMinSize: CGFloat = 0.03
+        let optimalMaxSize: CGFloat = 0.2
+        
+        var confidence: Float = 0.0
+        
+        if normalizedRadius >= optimalMinSize && normalizedRadius <= optimalMaxSize {
+            // Optimal range - high confidence
+            confidence = 0.9
+        } else if normalizedRadius < optimalMinSize {
+            // Small but visible - scale confidence with size
+            // Use log scale for very small sizes to avoid confidence dropping to zero
+            let minConfidence: Float = 0.3 // Even tiniest blobs get 30% confidence
+            let sizeRatio = Float(max(0, min(1, (normalizedRadius - minReasonableSize) / (optimalMinSize - minReasonableSize))))
+            confidence = minConfidence + (sizeRatio * 0.6) // 0.3 to 0.9
+        } else {
+            // Large - scale confidence down as it gets bigger
+            let sizeRatio = Float((normalizedRadius - optimalMaxSize) / (maxReasonableSize - optimalMaxSize))
+            confidence = 0.9 - (sizeRatio * 0.4) // 0.9 to 0.5
+        }
+        
+        // Check aspect ratio as a basic sanity check (not too elongated)
+        // This helps filter out obvious non-puck shapes without requiring perfect circles
+        let aspectRatio = CGFloat(bboxWidth) / CGFloat(max(bboxHeight, 1))
+        let isReasonablyRound = aspectRatio > 0.3 && aspectRatio < 3.0 // Even more permissive
+        
+        if !isReasonablyRound {
+            confidence *= 0.7 // Reduce confidence less aggressively
+        }
+        
+        // VERY low minimum confidence threshold for distance tracking
+        guard confidence > 0.2 else {
+            return nil
+        }
         
         return PuckPosition(
             x: normalizedX,
