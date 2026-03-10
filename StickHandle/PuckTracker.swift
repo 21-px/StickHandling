@@ -275,8 +275,12 @@ class PuckTracker: ObservableObject {
         }
         
         // In debug mode, convert mask to UIImage for visualization
+        // Use FULL RESOLUTION mask for proper edge-to-edge display
         if debugMode {
-            if let cgImage = ciContext.createCGImage(greenMask, from: greenMask.extent) {
+            // Create full-resolution mask for debug display
+            let fullResMask = createColorMask(for: image, skipScaling: true)
+            if let fullResMask = fullResMask,
+               let cgImage = ciContext.createCGImage(fullResMask, from: fullResMask.extent) {
                 Task { @MainActor [weak self] in
                     self?.debugImage = UIImage(cgImage: cgImage)
                 }
@@ -446,12 +450,22 @@ class PuckTracker: ObservableObject {
     }
     
     /// Create a binary mask highlighting green regions
-    nonisolated private func createColorMask(for image: CIImage) -> CIImage? {
+    /// - Parameters:
+    ///   - image: Input image
+    ///   - skipScaling: If true, creates full-resolution mask (for debug display)
+    nonisolated private func createColorMask(for image: CIImage, skipScaling: Bool = false) -> CIImage? {
         
-        // Reduce image size even MORE for maximum speed
-        // Scale down to 160px wide - much faster, still accurate enough for tracking
-        let scale = 160.0 / image.extent.width
-        let scaledImage = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let inputImage: CIImage
+        
+        if skipScaling {
+            // Full resolution for debug display
+            inputImage = image
+        } else {
+            // Reduce image size even MORE for maximum speed
+            // Scale down to 160px wide - much faster, still accurate enough for tracking
+            let scale = 160.0 / image.extent.width
+            inputImage = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        }
         
         // Use cached color cube data instead of recreating every frame
         let cubeSize = 64
@@ -459,7 +473,7 @@ class PuckTracker: ObservableObject {
         let colorCube = CIFilter(name: "CIColorCube")
         colorCube?.setValue(cubeSize, forKey: "inputCubeDimension")
         colorCube?.setValue(colorCubeData, forKey: "inputCubeData")
-        colorCube?.setValue(scaledImage, forKey: kCIInputImageKey)
+        colorCube?.setValue(inputImage, forKey: kCIInputImageKey)
         
         return colorCube?.outputImage
     }

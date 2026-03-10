@@ -31,6 +31,15 @@ struct PuckTrackingView: View {
             CameraPreview(cameraManager: cameraManager)
                 .ignoresSafeArea()
             
+            // Debug mask overlay (if enabled) - must be at same level as camera to match edge-to-edge
+            if showDebugMask, let debugImage = puckTracker.debugImage {
+                Image(uiImage: debugImage)
+                    .resizable()
+                    .scaledToFill()
+                    .ignoresSafeArea()
+                    .opacity(0.5)
+            }
+            
             // UI overlays - respect safe area
             GeometryReader { geometry in
                 ZStack {
@@ -46,14 +55,6 @@ struct PuckTrackingView: View {
                                     }
                                 }
                         )
-                
-                // Debug mask overlay (if enabled)
-                if showDebugMask, let debugImage = puckTracker.debugImage {
-                    Image(uiImage: debugImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .opacity(0.5)
-                }
                 
                 // Puck tracking overlay
                 if let puckPosition = puckTracker.puckPosition {
