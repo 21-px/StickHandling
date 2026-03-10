@@ -24,33 +24,40 @@ func findNearbyLocations(from location: CLLocation, radius: Double) -> [PointOfI
 
 ## General Guidelines
 
-### 1. Do Not Create .md Files for Explanations
+### 1. Planning and Question-Answering Protocol
+- **Always propose a plan first** before implementing any fixes or changes
+- **Wait for sign-off** - get explicit approval or modifications to the plan before proceeding with code changes
+- **If the user asks a question, answer it** - do not respond by immediately fixing code
+- **Propose a plan only if appropriate** - if a question seems to be leading toward a fix, answer the question first and then propose a plan if relevant
+- Think of this as a collaborative process: understand → plan → approval → implement
+
+### 2. Do Not Create .md Files for Explanations
 - **Do not create markdown files to explain what you're doing** unless explicitly requested
 - Only use .md files when the developer asks, or if you need it for context on long running tasks
 - Keep explanations in chat responses instead of creating documentation files
 - Focus on code changes, not documentation generation
 
-### 2. Always Verify No Build Errors
+### 3. Always Verify No Build Errors
 - **Double check that there will be no build errors** after completing tasks
 - Verify all method calls exist before using them
 - Ensure all properties are declared in the correct classes
 - Check that all types are properly defined and imported
 - Confirm syntax is correct before finishing
 
-### 3. Do Not Build or Edit Tests
+### 4. Do Not Build or Edit Tests
 - **Do not create test files** unless explicitly requested
 - **Do not modify existing test files** 
 - Focus on production code only
 - Testing will be handled separately by the developer
 
-### 4. Reuse Existing Functionality
+### 5. Reuse Existing Functionality
 - **Always check if functionality already exists** before creating new code
 - Search the codebase for similar functions, views, or utilities
 - Extend or refactor existing code rather than duplicating
 - If you find existing functionality, reference it and ask if it should be reused
 - DRY principle: Don't Repeat Yourself
 
-### 5. Explain iOS/Swift Concepts
+### 6. Explain iOS/Swift Concepts
 When introducing iOS/Swift concepts, provide brief explanations:
 - **SwiftUI**: Like React - declarative UI framework
 - **@State**: Like React's useState - local component state
@@ -61,13 +68,13 @@ When introducing iOS/Swift concepts, provide brief explanations:
 - **View Protocol**: Like React component interface
 - **Modifiers**: Like CSS or method chaining for styling
 
-### 6. Code Organization
+### 7. Code Organization
 - Keep views small and composable (like React components)
 - Extract reusable components into separate files
 - Use meaningful file and function names
 - Group related functionality together
 
-### 7. Prefer Modern Swift
+### 8. Prefer Modern Swift
 - Use Swift Concurrency (async/await) over older patterns
 - Use SwiftUI over UIKit when possible
 - Use native Apple frameworks and APIs
