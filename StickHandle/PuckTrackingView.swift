@@ -26,20 +26,26 @@ struct PuckTrackingView: View {
     @Environment(\.dismiss) var dismiss
     
     var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                // Camera preview layer
-                CameraPreview(cameraManager: cameraManager)
-                    .edgesIgnoringSafeArea(.all)
-                    .gesture(
-                        // Tap gesture for color picking
-                        DragGesture(minimumDistance: 0)
-                            .onEnded { value in
-                                if colorPickerMode {
-                                    handleColorPick(at: value.location, viewSize: geometry.size)
+        ZStack {
+            // Camera preview layer - extends to screen edges
+            CameraPreview(cameraManager: cameraManager)
+                .ignoresSafeArea()
+            
+            // UI overlays - respect safe area
+            GeometryReader { geometry in
+                ZStack {
+                    // Invisible gesture layer for color picking
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(
+                            // Tap gesture for color picking
+                            DragGesture(minimumDistance: 0)
+                                .onEnded { value in
+                                    if colorPickerMode {
+                                        handleColorPick(at: value.location, viewSize: geometry.size)
+                                    }
                                 }
-                            }
-                    )
+                        )
                 
                 // Debug mask overlay (if enabled)
                 if showDebugMask, let debugImage = puckTracker.debugImage {
@@ -47,7 +53,6 @@ struct PuckTrackingView: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .opacity(0.5)
-                        .edgesIgnoringSafeArea(.all)
                 }
                 
                 // Puck tracking overlay
@@ -225,30 +230,31 @@ struct PuckTrackingView: View {
                         .padding()
                     }
                 }
-            }
-            .onReceive(cameraManager.frames) { frame in
-                // Process each frame as it comes in
-                puckTracker.processFrame(frame)
-            }
-            .task {
-                // Request camera access when view appears
-                await cameraManager.requestAccess()
-                
-                if cameraManager.isAuthorized {
-                    // Start camera session
-                    cameraManager.startSession()
                 }
-            }
-            .onDisappear {
-                cameraManager.stopSession()
-            }
-            .alert("Camera Error", isPresented: .constant(cameraManager.error != nil)) {
-                Button("OK") {
-                    // In a real app, might want to open Settings
+                .onReceive(cameraManager.frames) { frame in
+                    // Process each frame as it comes in
+                    puckTracker.processFrame(frame)
                 }
-            } message: {
-                if let error = cameraManager.error {
-                    Text(error.localizedDescription)
+                .task {
+                    // Request camera access when view appears
+                    await cameraManager.requestAccess()
+                    
+                    if cameraManager.isAuthorized {
+                        // Start camera session
+                        cameraManager.startSession()
+                    }
+                }
+                .onDisappear {
+                    cameraManager.stopSession()
+                }
+                .alert("Camera Error", isPresented: .constant(cameraManager.error != nil)) {
+                    Button("OK") {
+                        // In a real app, might want to open Settings
+                    }
+                } message: {
+                    if let error = cameraManager.error {
+                        Text(error.localizedDescription)
+                    }
                 }
             }
         }

@@ -166,9 +166,9 @@ class CameraManager: NSObject, ObservableObject {
     /// Get the capture session for preview layer (used by the view)
     func getPreviewLayer() -> AVCaptureVideoPreviewLayer {
         let previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
-        // Use .resizeAspect to show the full camera frame without cropping
-        // This ensures tracking coordinates match what's visible in the preview
-        previewLayer.videoGravity = .resizeAspect
+        // Use .resizeAspectFill to fill the entire screen edge-to-edge
+        // This may crop the video slightly but provides the best full-screen experience
+        previewLayer.videoGravity = .resizeAspectFill
         return previewLayer
     }
 }
