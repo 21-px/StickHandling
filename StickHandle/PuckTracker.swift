@@ -113,11 +113,6 @@ class PuckTracker: ObservableObject {
             return
         }
         
-        // Log every 30th frame to confirm processing is happening
-        if frameCount % 30 == 0 {
-            print("📹 PuckTracker: Processing frame \(frameCount)")
-        }
-        
         // Capture orientation on main actor before going to background queue
         // UIDevice.current.orientation can ONLY be read on main thread
         Task { @MainActor [weak self] in
@@ -129,12 +124,6 @@ class PuckTracker: ObservableObject {
                 
                 // Convert pixel buffer to CIImage for processing
                 let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-                
-                // 🔍 DIAGNOSTIC 1: Raw image dimensions
-                print("🔍 DIAGNOSTIC 1 - Raw CVPixelBuffer → CIImage:")
-                print("   extent.width = \(ciImage.extent.width)")
-                print("   extent.height = \(ciImage.extent.height)")
-                print("   extent.origin = (\(ciImage.extent.origin.x), \(ciImage.extent.origin.y))")
                 
                 // Get image dimensions for distance estimation
                 let imageWidth = Int(ciImage.extent.width)
@@ -163,31 +152,12 @@ class PuckTracker: ObservableObject {
                     // Apply temporal smoothing to reduce jitter
                     let smoothedPosition = self.applySmoothing(to: positionWithDistance)
                     
-                    // 🔍 DIAGNOSTIC 5: After smoothing, before publishing
-                    print("🔍 DIAGNOSTIC 5 - After Smoothing:")
-                    print("   smoothed x = \(smoothedPosition.x)")
-                    print("   smoothed y = \(smoothedPosition.y)")
-                    print("   smoothed radius = \(smoothedPosition.radius)")
-                    print("   smoothed confidence = \(smoothedPosition.confidence)")
-                    
                     Task { @MainActor [weak self] in
                         guard let self = self else { return }
                         self.puckPosition = smoothedPosition
                         self.isTracking = true
                         self.trackingConfidence = smoothedPosition.confidence
                         self.lastDetectionTime = Date()
-                        
-                        // 🔍 DIAGNOSTIC 6: Published PuckPosition
-                        print("🔍 DIAGNOSTIC 6 - Published to @Published puckPosition:")
-                        print("   FINAL x = \(smoothedPosition.x)")
-                        print("   FINAL y = \(smoothedPosition.y)")
-                        print("   FINAL radius = \(smoothedPosition.radius)")
-                        print("   FINAL confidence = \(smoothedPosition.confidence)")
-                        
-                        // Log first detection
-                        if self.frameCount % 30 == 0 {
-                            print("✅ Puck detected at (\(smoothedPosition.x), \(smoothedPosition.y)) confidence: \(smoothedPosition.confidence)")
-                        }
                     }
                 } else {
                     // Check if we've lost tracking
@@ -322,8 +292,6 @@ class PuckTracker: ObservableObject {
             }
         }
         
-        print("📊 Sampled \(sampleCount) pixels in 3x3 grid")
-        
         guard sampleCount > 0 else { return nil }
         
         let r = rSum / CGFloat(sampleCount)
@@ -389,9 +357,6 @@ class PuckTracker: ObservableObject {
             saturation: targetSaturation,
             brightness: targetBrightness
         )
-        
-        print("🎨 Updated puck color to H:\(hsv.h) S:\(hsv.s) V:\(hsv.v)")
-        print("   Ranges: H[\(targetHue.min)-\(targetHue.max)] S[\(targetSaturation.min)-\(targetSaturation.max)] V[\(targetBrightness.min)-\(targetBrightness.max)]")
     }
     
     /// Detect the green puck in an image using color filtering
@@ -412,15 +377,6 @@ class PuckTracker: ObservableObject {
             // Create full-resolution mask for debug display
             let fullResMask = createColorMask(for: image, skipScaling: true)
             if let fullResMask = fullResMask {
-                
-                // 🔍 DIAGNOSTIC: CIImage extent before createCGImage
-                print("🔍 DEBUG MASK - Before createCGImage:")
-                print("   mask.extent.origin.x = \(fullResMask.extent.origin.x)")
-                print("   mask.extent.origin.y = \(fullResMask.extent.origin.y)")
-                print("   mask.extent.width = \(fullResMask.extent.width)")
-                print("   mask.extent.height = \(fullResMask.extent.height)")
-                print("   ⚠️ Origin should be (0, 0) for correct rendering")
-                
                 if let cgImage = ciContext.createCGImage(fullResMask, from: fullResMask.extent) {
                     Task { @MainActor [weak self] in
                         // FIX: Use screen scale for retina displays
@@ -428,15 +384,6 @@ class PuckTracker: ObservableObject {
                         // The image gets cropped/offset when .scaledToFill() is applied
                         let screenScale = UIScreen.main.scale
                         self?.debugImage = UIImage(cgImage: cgImage, scale: screenScale, orientation: .up)
-                        
-                        // 🔍 DIAGNOSTIC: Debug mask UIImage info
-                        if let debugImg = self?.debugImage {
-                            print("🔍 DEBUG MASK - UIImage created:")
-                            print("   CGImage size: \(cgImage.width) x \(cgImage.height) pixels")
-                            print("   UIImage size: \(debugImg.size.width) x \(debugImg.size.height) points")
-                            print("   Screen scale: \(screenScale)x")
-                            print("   UIImage scale: \(debugImg.scale)x")
-                        }
                     }
                 }
             }
@@ -540,25 +487,10 @@ class PuckTracker: ObservableObject {
         let bboxHeight = maxY - minY
         let radius = max(bboxWidth, bboxHeight) / 2
         
-        // 🔍 DIAGNOSTIC 3: Blob detection raw values before normalization
-        print("🔍 DIAGNOSTIC 3 - Blob Detection (before normalization):")
-        print("   centerX (pixels) = \(centerX)")
-        print("   centerY (pixels) = \(centerY)")
-        print("   pixelCount = \(pixelCount)")
-        print("   radius (pixels) = \(radius)")
-        print("   image.width = \(width)")
-        print("   image.height = \(height)")
-        print("   bboxWidth = \(bboxWidth), bboxHeight = \(bboxHeight)")
-        
         // Normalize coordinates (0-1) relative to the SCALED image
         let normalizedX = centerX / CGFloat(width)
         let normalizedY = centerY / CGFloat(height)
         let normalizedRadius = CGFloat(radius) / CGFloat(min(width, height))
-        
-        print("   After normalization:")
-        print("   normalizedX = \(normalizedX) (centerX / width)")
-        print("   normalizedY = \(normalizedY) (centerY / height)")
-        print("   normalizedRadius = \(normalizedRadius)")
         
         // SIMPLIFIED CONFIDENCE CALCULATION FOR DISTANCE TRACKING
         // At distance, downscaling makes pucks lose circular shape, so we just check:
@@ -618,13 +550,6 @@ class PuckTracker: ObservableObject {
             confidence: confidence
         )
         
-        // 🔍 DIAGNOSTIC 4: Final PuckPosition before smoothing
-        print("🔍 DIAGNOSTIC 4 - Final PuckPosition (before smoothing):")
-        print("   x = \(position.x)")
-        print("   y = \(position.y)")
-        print("   radius = \(position.radius)")
-        print("   confidence = \(position.confidence)")
-        
         return position
     }
     
@@ -644,13 +569,6 @@ class PuckTracker: ObservableObject {
             // Scale down to 160px wide - much faster, still accurate enough for tracking
             let scale = 160.0 / image.extent.width
             inputImage = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-            
-            // 🔍 DIAGNOSTIC 2: Image dimensions after scaling
-            print("🔍 DIAGNOSTIC 2 - After Scaling Transform:")
-            print("   scale factor = \(scale)")
-            print("   extent.width = \(inputImage.extent.width)")
-            print("   extent.height = \(inputImage.extent.height)")
-            print("   extent.origin = (\(inputImage.extent.origin.x), \(inputImage.extent.origin.y))")
         }
         
         // Use cached color cube data instead of recreating every frame
@@ -819,21 +737,10 @@ struct PuckPosition {
         var adjustedX = x
         var adjustedY = y
         
-        // 🔍 DIAGNOSTIC 7: toScreenCoordinates input
-        print("🔍 DIAGNOSTIC 7 - toScreenCoordinates() called:")
-        print("   INPUT normalized x = \(x)")
-        print("   INPUT normalized y = \(y)")
-        print("   viewSize.width = \(viewSize.width)")
-        print("   viewSize.height = \(viewSize.height)")
-        print("   transformForARKit = \(transformForARKit)")
-        print("   orientation = \(orientation)")
-        
         // Only transform if using ARKit frames
         if transformForARKit {
             // ARKit frames are always in the camera sensor's native orientation (landscape-right)
             // We need to transform these coordinates to match the current device orientation
-            
-            print("   Applying ARKit transform...")
             
             switch orientation {
             case .portrait, .unknown, .faceUp, .faceDown:
@@ -842,50 +749,37 @@ struct PuckPosition {
                 // Transform: rotate coordinates 90° clockwise to match portrait
                 adjustedX = 1.0 - y
                 adjustedY = x
-                print("   Transform: portrait (adjustedX = 1.0 - y, adjustedY = x)")
                 
             case .portraitUpsideDown:
                 // ARKit landscape-right → Portrait upside-down display
                 // Rotate 90° counterclockwise from landscape-right
                 adjustedX = y
                 adjustedY = 1.0 - x
-                print("   Transform: portraitUpsideDown")
                 
             case .landscapeLeft:
                 // ARKit landscape-right → Landscape-left display
                 // 180° rotation needed
                 adjustedX = x
                 adjustedY = y
-                print("   Transform: landscapeLeft")
                 
             case .landscapeRight:
                 // ARKit landscape-right → Landscape-right display
                 // Actually needs 180° rotation because camera sensor is opposite direction
                 adjustedX = 1.0 - x
                 adjustedY = 1.0 - y
-                print("   Transform: landscapeRight")
                 
             @unknown default:
                 // Default to portrait transformation
                 adjustedX = 1.0 - y
                 adjustedY = x
-                print("   Transform: unknown (default to portrait)")
             }
-        } else {
-            print("   No ARKit transform applied (coordinates already in screen space)")
         }
         // If not transformForARKit, coordinates are already correct (from CameraManager)
-        
-        print("   After adjustment:")
-        print("   adjustedX = \(adjustedX)")
-        print("   adjustedY = \(adjustedY)")
         
         let finalPoint = CGPoint(
             x: adjustedX * viewSize.width,
             y: adjustedY * viewSize.height
         )
-        
-        print("   OUTPUT screen point = (\(finalPoint.x), \(finalPoint.y))")
         
         return finalPoint
     }

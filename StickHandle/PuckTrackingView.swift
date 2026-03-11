@@ -43,34 +43,10 @@ struct PuckTrackingView: View {
                     .clipped()  // Clip to frame bounds
                     .ignoresSafeArea()
                     .opacity(0.5)
-                    .background(
-                        GeometryReader { geometry in
-                            Color.clear
-                                .onAppear {
-                                    // 🔍 DIAGNOSTIC: Image view size vs preview layer size
-                                    print("🔍 DEBUG MASK IMAGE VIEW:")
-                                    print("   GeometryReader size: \(geometry.size.width) x \(geometry.size.height)")
-                                    print("   Preview layer size: \(cameraManager.previewLayerSize.width) x \(cameraManager.previewLayerSize.height)")
-                                    print("   Using preview layer size for .frame() to match exactly")
-                                }
-                                .onChange(of: geometry.size) { newSize in
-                                    print("🔍 DEBUG MASK - GeometryReader size changed: \(newSize.width) x \(newSize.height)")
-                                }
-                                .onChange(of: cameraManager.previewLayerSize) { newSize in
-                                    print("🔍 DEBUG MASK - Preview layer size changed: \(newSize.width) x \(newSize.height)")
-                                }
-                        }
-                    )
             }
             
             // UI overlays - respect safe area
             GeometryReader { geometry in
-                // 🔍 DIAGNOSTIC: GeometryReader size
-                let _ = print("🔍 GEOMETRY - PuckTrackingView GeometryReader:")
-                let _ = print("   geometry.size.width = \(geometry.size.width)")
-                let _ = print("   geometry.size.height = \(geometry.size.height)")
-                let _ = print("   Should be PORTRAIT (width < height)")
-                
                 ZStack {
                     // Invisible gesture layer for color picking
                     Color.clear
@@ -292,8 +268,6 @@ struct PuckTrackingView: View {
     
     /// Handle color selection when user taps on the camera feed
     private func handleColorPick(at location: CGPoint, viewSize: CGSize) {
-        print("🎨 Tap at screen: (\(location.x), \(location.y)) in view size: \(viewSize)")
-        
         // Show tap indicator
         lastTapLocation = location
         withAnimation {
@@ -307,11 +281,8 @@ struct PuckTrackingView: View {
             y: location.y / viewSize.height
         )
         
-        print("🎨 Normalized tap: (\(normalizedPoint.x), \(normalizedPoint.y))")
-        
         // Get color at that point
         guard let hsv = puckTracker.getColorAt(normalizedPoint: normalizedPoint) else {
-            print("❌ Could not extract color at point")
             // Hide tap indicator after a moment
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 withAnimation {
@@ -320,8 +291,6 @@ struct PuckTrackingView: View {
             }
             return
         }
-        
-        print("🎨 Extracted HSV: H:\(hsv.h) S:\(hsv.s) V:\(hsv.v)")
         
         // Update the puck tracker with this color
         puckTracker.updateTargetColor(hsv: hsv)

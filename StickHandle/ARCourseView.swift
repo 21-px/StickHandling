@@ -37,12 +37,6 @@ struct ARCourseView: View {
     
     var body: some View {
         GeometryReader { geometry in
-            // 🔍 DIAGNOSTIC: GeometryReader size
-            let _ = print("🔍 GEOMETRY - ARCourseView GeometryReader:")
-            let _ = print("   geometry.size.width = \(geometry.size.width)")
-            let _ = print("   geometry.size.height = \(geometry.size.height)")
-            let _ = print("   Should be PORTRAIT (width < height)")
-            
             ZStack {
                 // AR view with course lines
                 ARViewContainer(
@@ -92,7 +86,6 @@ struct ARCourseView: View {
                         
                         // Debug: Switch to Puck Tracking View
                         Button(action: {
-                            print("🔍 DEBUG: Debug button tapped!")
                             showPuckTrackingView = true
                         }) {
                             VStack(spacing: 4) {
@@ -158,12 +151,10 @@ struct ARCourseView: View {
         .fullScreenCover(isPresented: $showPuckTrackingView) {
             PuckTrackingView()
                 .onAppear {
-                    print("🔍 DEBUG VIEW: Appeared - pausing AR session")
                     // Pause AR session when showing debug view
                     arSession?.pause()
                 }
                 .onDisappear {
-                    print("🔍 DEBUG VIEW: Disappeared - resuming AR session")
                     // Resume AR session when returning
                     if let session = arSession {
                         let config = ARWorldTrackingConfiguration()
@@ -173,8 +164,6 @@ struct ARCourseView: View {
                 }
         }
         .onAppear {
-            print("📱 ARCourseView appeared - Debug button should be visible")
-            print("📱 showPuckTrackingView state: \(showPuckTrackingView)")
             setupTracking()
             setupOrientationObserver()
         }
@@ -214,7 +203,6 @@ struct ARCourseView: View {
     
     private func setupTracking() {
         // Get frames directly from ARKit (passed via ARSessionDelegate)
-        print("📱 Setting up puck tracking (using ARKit frames)")
         
         // Subscribe to puck position updates
         puckTracker.$puckPosition
