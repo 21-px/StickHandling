@@ -37,12 +37,71 @@ class CameraManager: NSObject, ObservableObject {
     nonisolated(unsafe) private let captureSession = AVCaptureSession()
     nonisolated(unsafe) private let videoOutput = AVCaptureVideoDataOutput()
     nonisolated(unsafe) private let sessionQueue = DispatchQueue(label: "com.stickhandle.camera")
+    nonisolated(unsafe) private var previewLayer: AVCaptureVideoPreviewLayer?
     
     // Permission status
     @Published var isAuthorized = false
     
     override init() {
         super.init()
+        
+        // Observe device orientation changes to update camera orientation
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(deviceOrientationDidChange),
+            name: UIDevice.orientationDidChangeNotification,
+            object: nil
+        )
+    }
+    
+    @objc private func deviceOrientationDidChange() {
+        updateVideoOrientation()
+    }
+    
+    nonisolated private func updateVideoOrientation() {
+        Task { @MainActor in
+            let orientation = UIDevice.current.orientation
+            
+            sessionQueue.async { [weak self] in
+                guard let self = self else { return }
+                
+                // Update video output connection orientation
+                if let connection = self.videoOutput.connection(with: .video),
+                   connection.isVideoOrientationSupported {
+                    
+                    switch orientation {
+                    case .portrait:
+                        connection.videoOrientation = .portrait
+                    case .portraitUpsideDown:
+                        connection.videoOrientation = .portraitUpsideDown
+                    case .landscapeLeft:
+                        connection.videoOrientation = .landscapeRight // Counter-intuitive but correct
+                    case .landscapeRight:
+                        connection.videoOrientation = .landscapeLeft // Counter-intuitive but correct
+                    default:
+                        break // Keep current orientation
+                    }
+                }
+                
+                // Update preview layer orientation
+                Task { @MainActor [weak self] in
+                    if let previewLayer = self?.previewLayer {
+                        switch orientation {
+                        case .portrait:
+                            previewLayer.connection?.videoOrientation = .portrait
+                        case .portraitUpsideDown:
+                            previewLayer.connection?.videoOrientation = .portraitUpsideDown
+                        case .landscapeLeft:
+                            previewLayer.connection?.videoOrientation = .landscapeRight
+                        case .landscapeRight:
+                            previewLayer.connection?.videoOrientation = .landscapeLeft
+                        default:
+                            break
+                        }
+                    }
+                }
+            }
+        }
     }
     
     /// Request camera permission and setup the camera session
@@ -116,9 +175,28 @@ class CameraManager: NSObject, ObservableObject {
                         self.captureSession.addOutput(self.videoOutput)
                     }
                     
-                    // Set video orientation
-                    if let connection = self.videoOutput.connection(with: .video) {
-                        connection.videoOrientation = .portrait
+                    // Set initial video orientation to current device orientation
+                    Task { @MainActor in
+                        let orientation = UIDevice.current.orientation
+                        
+                        self.sessionQueue.async { [weak self] in
+                            guard let self = self else { return }
+                            
+                            if let connection = self.videoOutput.connection(with: .video) {
+                                switch orientation {
+                                case .portrait, .unknown, .faceUp, .faceDown:
+                                    connection.videoOrientation = .portrait
+                                case .portraitUpsideDown:
+                                    connection.videoOrientation = .portraitUpsideDown
+                                case .landscapeLeft:
+                                    connection.videoOrientation = .landscapeRight
+                                case .landscapeRight:
+                                    connection.videoOrientation = .landscapeLeft
+                                @unknown default:
+                                    connection.videoOrientation = .portrait
+                                }
+                            }
+                        }
                     }
                     
                     self.captureSession.commitConfiguration()
@@ -165,11 +243,33 @@ class CameraManager: NSObject, ObservableObject {
     
     /// Get the capture session for preview layer (used by the view)
     func getPreviewLayer() -> AVCaptureVideoPreviewLayer {
-        let previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
-        // Use .resizeAspectFill to fill the entire screen edge-to-edge
-        // This may crop the video slightly but provides the best full-screen experience
-        previewLayer.videoGravity = .resizeAspectFill
-        return previewLayer
+        // Reuse existing preview layer if available
+        if let existingLayer = previewLayer {
+            return existingLayer
+        }
+        
+        let newPreviewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
+        // Use .resizeAspectFill to fill the screen edge-to-edge without black bars
+        // Combined with dynamic orientation, this prevents zooming
+        newPreviewLayer.videoGravity = .resizeAspectFill
+        
+        // Set initial orientation
+        let orientation = UIDevice.current.orientation
+        switch orientation {
+        case .portrait, .unknown, .faceUp, .faceDown:
+            newPreviewLayer.connection?.videoOrientation = .portrait
+        case .portraitUpsideDown:
+            newPreviewLayer.connection?.videoOrientation = .portraitUpsideDown
+        case .landscapeLeft:
+            newPreviewLayer.connection?.videoOrientation = .landscapeRight
+        case .landscapeRight:
+            newPreviewLayer.connection?.videoOrientation = .landscapeLeft
+        @unknown default:
+            newPreviewLayer.connection?.videoOrientation = .portrait
+        }
+        
+        previewLayer = newPreviewLayer
+        return newPreviewLayer
     }
 }
 
