@@ -46,63 +46,9 @@ class CameraManager: NSObject, ObservableObject {
     override init() {
         super.init()
         
-        // Observe device orientation changes to update camera orientation
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(deviceOrientationDidChange),
-            name: UIDevice.orientationDidChangeNotification,
-            object: nil
-        )
-    }
-    
-    @objc private func deviceOrientationDidChange() {
-        updateVideoOrientation()
-    }
-    
-    nonisolated private func updateVideoOrientation() {
-        Task { @MainActor in
-            let orientation = UIDevice.current.orientation
-            
-            sessionQueue.async { [weak self] in
-                guard let self = self else { return }
-                
-                // Update video output connection orientation
-                if let connection = self.videoOutput.connection(with: .video),
-                   connection.isVideoOrientationSupported {
-                    
-                    switch orientation {
-                    case .portrait:
-                        connection.videoOrientation = .portrait
-                    case .portraitUpsideDown:
-                        connection.videoOrientation = .portraitUpsideDown
-                    case .landscapeLeft:
-                        connection.videoOrientation = .landscapeRight // Counter-intuitive but correct
-                    case .landscapeRight:
-                        connection.videoOrientation = .landscapeLeft // Counter-intuitive but correct
-                    default:
-                        break // Keep current orientation
-                    }
-                }
-                
-                // Update preview layer orientation
-                Task { @MainActor [weak self] in
-                    if let previewLayer = self?.previewLayer {
-                        switch orientation {
-                        case .portrait:
-                            previewLayer.connection?.videoOrientation = .portrait
-                        case .portraitUpsideDown:
-                            previewLayer.connection?.videoOrientation = .portraitUpsideDown
-                        case .landscapeLeft:
-                            previewLayer.connection?.videoOrientation = .landscapeRight
-                        case .landscapeRight:
-                            previewLayer.connection?.videoOrientation = .landscapeLeft
-                        default:
-                            break
-                        }
-                    }
-                }
-            }
-        }
+        // DO NOT observe orientation changes - we want camera feed to stay locked
+        // like ARKit does. Only the UI overlay should rotate, not the camera preview.
+        // This prevents the camera feed from rotating/flashing when user turns device.
     }
     
     /// Request camera permission and setup the camera session
@@ -176,28 +122,11 @@ class CameraManager: NSObject, ObservableObject {
                         self.captureSession.addOutput(self.videoOutput)
                     }
                     
-                    // Set initial video orientation to current device orientation
-                    Task { @MainActor in
-                        let orientation = UIDevice.current.orientation
-                        
-                        self.sessionQueue.async { [weak self] in
-                            guard let self = self else { return }
-                            
-                            if let connection = self.videoOutput.connection(with: .video) {
-                                switch orientation {
-                                case .portrait, .unknown, .faceUp, .faceDown:
-                                    connection.videoOrientation = .portrait
-                                case .portraitUpsideDown:
-                                    connection.videoOrientation = .portraitUpsideDown
-                                case .landscapeLeft:
-                                    connection.videoOrientation = .landscapeRight
-                                case .landscapeRight:
-                                    connection.videoOrientation = .landscapeLeft
-                                @unknown default:
-                                    connection.videoOrientation = .portrait
-                                }
-                            }
-                        }
+                    // LOCK video orientation to portrait - do NOT respond to device rotation
+                    // This mimics ARKit behavior: camera feed stays locked, only UI rotates
+                    if let connection = self.videoOutput.connection(with: .video),
+                       connection.isVideoOrientationSupported {
+                        connection.videoOrientation = .portrait
                     }
                     
                     self.captureSession.commitConfiguration()
@@ -251,23 +180,11 @@ class CameraManager: NSObject, ObservableObject {
         
         let newPreviewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
         // Use .resizeAspectFill to fill the screen edge-to-edge without black bars
-        // Combined with dynamic orientation, this prevents zooming
         newPreviewLayer.videoGravity = .resizeAspectFill
         
-        // Set initial orientation
-        let orientation = UIDevice.current.orientation
-        switch orientation {
-        case .portrait, .unknown, .faceUp, .faceDown:
-            newPreviewLayer.connection?.videoOrientation = .portrait
-        case .portraitUpsideDown:
-            newPreviewLayer.connection?.videoOrientation = .portraitUpsideDown
-        case .landscapeLeft:
-            newPreviewLayer.connection?.videoOrientation = .landscapeRight
-        case .landscapeRight:
-            newPreviewLayer.connection?.videoOrientation = .landscapeLeft
-        @unknown default:
-            newPreviewLayer.connection?.videoOrientation = .portrait
-        }
+        // LOCK preview orientation to portrait - do NOT respond to device rotation
+        // This mimics ARKit behavior: camera feed stays locked, only UI rotates
+        newPreviewLayer.connection?.videoOrientation = .portrait
         
         previewLayer = newPreviewLayer
         return newPreviewLayer

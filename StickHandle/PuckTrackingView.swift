@@ -264,6 +264,14 @@ struct PuckTrackingView: View {
                 }
             }
         }
+        // CRITICAL: Lock interface orientation to portrait to prevent camera rotation
+        // This mimics ARKit behavior where camera feed stays locked
+        .onAppear {
+            AppDelegate.orientationLock = .portrait
+        }
+        .onDisappear {
+            AppDelegate.orientationLock = .all
+        }
     }
     
     /// Handle color selection when user taps on the camera feed
