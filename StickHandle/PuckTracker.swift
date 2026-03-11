@@ -103,7 +103,7 @@ class PuckTracker: ObservableObject {
     
     /// Process a video frame to detect the green puck
     /// Call this for each frame from the camera
-    nonisolated func processFrame(_ pixelBuffer: CVPixelBuffer) {
+    nonisolated func processFrame(_ pixelBuffer: CVPixelBuffer, cameraIntrinsics: simd_float3x3? = nil) {
         // Store the current frame for potential color picking
         currentFrame = pixelBuffer
         
@@ -125,10 +125,32 @@ class PuckTracker: ObservableObject {
             // Convert pixel buffer to CIImage for processing
             let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
             
+            // Get image dimensions for distance estimation
+            let imageWidth = CVPixelBufferGetWidth(pixelBuffer)
+            let imageHeight = CVPixelBufferGetHeight(pixelBuffer)
+            
             // Detect green regions in the image
             if let position = self.detectGreenPuck(in: ciImage, pixelBuffer: pixelBuffer) {
+                // Estimate distance if camera intrinsics are available
+                var positionWithDistance = position
+                if let intrinsics = cameraIntrinsics {
+                    let distance = self.estimateDistance(
+                        detectedRadiusNormalized: position.radius,
+                        imageWidth: imageWidth,
+                        imageHeight: imageHeight,
+                        intrinsics: intrinsics
+                    )
+                    positionWithDistance = PuckPosition(
+                        x: position.x,
+                        y: position.y,
+                        radius: position.radius,
+                        confidence: position.confidence,
+                        estimatedDistance: distance
+                    )
+                }
+                
                 // Apply temporal smoothing to reduce jitter
-                let smoothedPosition = self.applySmoothing(to: position)
+                let smoothedPosition = self.applySmoothing(to: positionWithDistance)
                 
                 Task { @MainActor [weak self] in
                     guard let self = self else { return }
@@ -162,6 +184,50 @@ class PuckTracker: ObservableObject {
     /// Enable or disable debug visualization
     func setDebugMode(_ enabled: Bool) {
         debugMode = enabled
+    }
+    
+    /// Estimate distance to puck using pinhole camera model
+    /// Distance = (RealSize * FocalLength) / ApparentSize
+    /// - Parameters:
+    ///   - detectedRadiusNormalized: Detected radius in normalized coordinates (0-1)
+    ///   - imageWidth: Image width in pixels
+    ///   - imageHeight: Image height in pixels
+    ///   - intrinsics: Camera intrinsic matrix (contains focal length)
+    /// - Returns: Estimated distance in meters, or nil if calculation fails
+    nonisolated private func estimateDistance(
+        detectedRadiusNormalized: CGFloat,
+        imageWidth: Int,
+        imageHeight: Int,
+        intrinsics: simd_float3x3
+    ) -> Float? {
+        // Extract focal length from intrinsics matrix
+        // intrinsics[0][0] = fx (focal length in x)
+        // intrinsics[1][1] = fy (focal length in y)
+        let focalLengthX = intrinsics[0][0]
+        let focalLengthY = intrinsics[1][1]
+        
+        // Use average focal length for more stable results
+        let focalLength = (focalLengthX + focalLengthY) / 2.0
+        
+        // Convert normalized radius to pixels
+        // Radius is normalized against the smaller dimension
+        let smallerDimension = min(imageWidth, imageHeight)
+        let radiusPixels = Float(detectedRadiusNormalized) * Float(smallerDimension)
+        
+        // Diameter in pixels = 2 * radius
+        let diameterPixels = radiusPixels * 2.0
+        
+        // Real puck diameter in meters
+        let realDiameter = Puck.diameterMeters
+        
+        // Pinhole camera formula: distance = (realSize * focalLength) / apparentSize
+        guard diameterPixels > 0 else { return nil }
+        let distance = (realDiameter * focalLength) / diameterPixels
+        
+        // Sanity check: puck should be between 0.1m and 10m away
+        guard distance > 0.1 && distance < 10.0 else { return nil }
+        
+        return distance
     }
     
     /// Apply temporal smoothing to reduce jitter in puck tracking
@@ -640,6 +706,7 @@ struct PuckPosition {
     let y: CGFloat // Vertical position (0 = top, 1 = bottom)
     let radius: CGFloat // Radius of detected puck (normalized)
     let confidence: Float // Confidence score 0-1
+    var estimatedDistance: Float? // Estimated distance to puck in meters (if available)
     
     /// Convert normalized coordinates to screen coordinates
     /// - Parameter viewSize: The size of the view (in screen coordinates)

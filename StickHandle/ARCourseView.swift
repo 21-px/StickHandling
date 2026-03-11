@@ -28,6 +28,7 @@ struct ARCourseView: View {
     @State private var isRecalibrating = false
     @State private var showPuckTrackingView = false
     @State private var arSession: ARSession?
+    @State private var cameraIntrinsics: simd_float3x3?
     
     init(course: Course) {
         self.course = course
@@ -44,7 +45,8 @@ struct ARCourseView: View {
                     coordinateMapper: coordinateMapper,
                     puckTracker: puckTracker,
                     shouldRecenter: $isRecalibrating,
-                    arSession: $arSession
+                    arSession: $arSession,
+                    cameraIntrinsics: $cameraIntrinsics
                 )
                 .edgesIgnoringSafeArea(.all)
                 .gesture(
@@ -61,7 +63,8 @@ struct ARCourseView: View {
                         position: puckPosition,
                         viewSize: geometry.size,
                         transformForARKit: true,  // Enable ARKit coordinate transformation
-                        orientation: orientation
+                        orientation: orientation,
+                        cameraIntrinsics: cameraIntrinsics
                     )
                     .allowsHitTesting(false) // Don't interfere with gestures
                 }
@@ -237,6 +240,7 @@ struct ARViewContainer: UIViewRepresentable {
     let puckTracker: PuckTracker
     @Binding var shouldRecenter: Bool
     @Binding var arSession: ARSession?
+    @Binding var cameraIntrinsics: simd_float3x3?
     
     func makeUIView(context: Context) -> ARView {
         let arView = ARView(frame: .zero)
@@ -282,7 +286,7 @@ struct ARViewContainer: UIViewRepresentable {
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(validator: validator, coordinateMapper: coordinateMapper, puckTracker: puckTracker)
+        Coordinator(validator: validator, coordinateMapper: coordinateMapper, puckTracker: puckTracker, cameraIntrinsics: $cameraIntrinsics)
     }
     
     class Coordinator: NSObject, ARSessionDelegate {
@@ -294,11 +298,13 @@ struct ARViewContainer: UIViewRepresentable {
         var course: Course?
         weak var arView: ARView?
         var isRecentering = false
+        var cameraIntrinsics: Binding<simd_float3x3?>
         
-        init(validator: CourseValidator, coordinateMapper: CoordinateMapper, puckTracker: PuckTracker) {
+        init(validator: CourseValidator, coordinateMapper: CoordinateMapper, puckTracker: PuckTracker, cameraIntrinsics: Binding<simd_float3x3?>) {
             self.validator = validator
             self.coordinateMapper = coordinateMapper
             self.puckTracker = puckTracker
+            self.cameraIntrinsics = cameraIntrinsics
         }
         
         func recenterCourse() {
@@ -448,9 +454,13 @@ struct ARViewContainer: UIViewRepresentable {
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
             coordinateMapper.updateCamera(frame.camera.transform)
             
+            // Update camera intrinsics for parent view
+            cameraIntrinsics.wrappedValue = frame.camera.intrinsics
+            
             // IMPORTANT: Pass ARKit camera frames to puck tracker
             // This provides the live camera feed for puck tracking
-            puckTracker.processFrame(frame.capturedImage)
+            // Also pass camera intrinsics for distance estimation
+            puckTracker.processFrame(frame.capturedImage, cameraIntrinsics: frame.camera.intrinsics)
         }
     }
 }
