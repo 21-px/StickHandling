@@ -49,6 +49,11 @@ class PuckTracker: ObservableObject {
     nonisolated(unsafe) private var lastDetectionTime = Date()
     private let detectionTimeout: TimeInterval = 0.5 // If no detection for 0.5s, mark as not tracking
     
+    // Temporal smoothing to reduce jitter
+    nonisolated(unsafe) private var smoothedPosition: CGPoint?
+    nonisolated(unsafe) private var smoothedRadius: CGFloat?
+    private let smoothingFactor: CGFloat = 0.5 // Lower = smoother but more lag, higher = snappier (0.5 = balanced)
+    
     // Frame throttling for performance
     nonisolated(unsafe) private var frameCount: Int = 0
     private let processEveryNthFrame = 1 // Process every frame now that we've optimized
@@ -122,16 +127,19 @@ class PuckTracker: ObservableObject {
             
             // Detect green regions in the image
             if let position = self.detectGreenPuck(in: ciImage, pixelBuffer: pixelBuffer) {
+                // Apply temporal smoothing to reduce jitter
+                let smoothedPosition = self.applySmoothing(to: position)
+                
                 Task { @MainActor [weak self] in
                     guard let self = self else { return }
-                    self.puckPosition = position
+                    self.puckPosition = smoothedPosition
                     self.isTracking = true
-                    self.trackingConfidence = position.confidence
+                    self.trackingConfidence = smoothedPosition.confidence
                     self.lastDetectionTime = Date()
                     
                     // Log first detection
                     if self.frameCount % 30 == 0 {
-                        print("✅ Puck detected at (\(position.x), \(position.y)) confidence: \(position.confidence)")
+                        print("✅ Puck detected at (\(smoothedPosition.x), \(smoothedPosition.y)) confidence: \(smoothedPosition.confidence)")
                     }
                 }
             } else {
@@ -143,6 +151,9 @@ class PuckTracker: ObservableObject {
                         self.isTracking = false
                         self.trackingConfidence = 0.0
                     }
+                    // Reset smoothing when tracking is lost
+                    self.smoothedPosition = nil
+                    self.smoothedRadius = nil
                 }
             }
         }
@@ -151,6 +162,35 @@ class PuckTracker: ObservableObject {
     /// Enable or disable debug visualization
     func setDebugMode(_ enabled: Bool) {
         debugMode = enabled
+    }
+    
+    /// Apply temporal smoothing to reduce jitter in puck tracking
+    /// Uses exponential moving average: new = (alpha * current) + ((1-alpha) * previous)
+    nonisolated private func applySmoothing(to position: PuckPosition) -> PuckPosition {
+        guard let previous = smoothedPosition, let prevRadius = smoothedRadius else {
+            // First detection, no smoothing
+            smoothedPosition = CGPoint(x: position.x, y: position.y)
+            smoothedRadius = position.radius
+            return position
+        }
+        
+        // Exponential moving average
+        // smoothingFactor controls how much we trust the new measurement vs. previous position
+        // Lower values = smoother but more lag, higher values = more responsive but less smooth
+        let newX = smoothingFactor * position.x + (1 - smoothingFactor) * previous.x
+        let newY = smoothingFactor * position.y + (1 - smoothingFactor) * previous.y
+        let newRadius = smoothingFactor * position.radius + (1 - smoothingFactor) * prevRadius
+        
+        // Update stored values for next frame
+        smoothedPosition = CGPoint(x: newX, y: newY)
+        smoothedRadius = newRadius
+        
+        return PuckPosition(
+            x: newX,
+            y: newY,
+            radius: newRadius,
+            confidence: position.confidence
+        )
     }
     
     /// Extract color at a specific normalized point in the current frame
@@ -329,9 +369,9 @@ class PuckTracker: ObservableObject {
         
         let buffer = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
         
-        // Aggressive downsampling for maximum speed
-        // Check every 3rd pixel (9x faster than checking every pixel!)
-        let sampleStep = 3
+        // Less aggressive downsampling for more stable detection
+        // Check every 2nd pixel (4x faster than checking every pixel, but more accurate than step=3)
+        let sampleStep = 2
         
         // Find all white pixels (green regions in the mask)
         var sumX: CGFloat = 0
@@ -369,9 +409,9 @@ class PuckTracker: ObservableObject {
         }
         
         // Need at least some pixels to consider it a detection
-        // EXTREMELY low threshold for maximum distance tracking
-        // At far distances on 160px image, puck might be just 1-2 pixels after sampling
-        let minPixels = 1 // Absolute minimum - will detect even single-pixel blobs
+        // Low threshold for distance tracking, but not so low that noise triggers false positives
+        // With sampleStep=2, we're checking 25% of pixels, so scale threshold accordingly
+        let minPixels = 3 // Requires at least 3 sampled pixels (equivalent to ~12 actual pixels)
         guard pixelCount > minPixels else {
             return nil
         }
@@ -634,27 +674,40 @@ struct PuckPosition {
         
         // Only transform if using ARKit frames
         if transformForARKit {
-            // Transform coordinates based on device orientation
-            if orientation == .portrait || orientation == .unknown {
+            // ARKit frames are always in the camera sensor's native orientation (landscape-right)
+            // We need to transform these coordinates to match the current device orientation
+            
+            switch orientation {
+            case .portrait, .unknown, .faceUp, .faceDown:
                 // ARKit landscape-right → Portrait display
-                // Based on observed behavior:
-                // - Puck up (y↓) → Circle left (x↓)
-                // - Puck down (y↑) → Circle right (x↑)
-                // - Puck right (x↑) → Circle up (y↓)
-                // - Puck left (x↓) → Circle down (y↑)
-                // This is: adjustedX = 1-y, adjustedY = x
+                // Camera coordinate system rotated 90° counterclockwise relative to portrait
+                // Transform: rotate coordinates 90° clockwise to match portrait
                 adjustedX = 1.0 - y
                 adjustedY = x
-            } else if orientation == .portraitUpsideDown {
-                // Rotate 180° from portrait
+                
+            case .portraitUpsideDown:
+                // ARKit landscape-right → Portrait upside-down display
+                // Rotate 90° counterclockwise from landscape-right
                 adjustedX = y
                 adjustedY = 1.0 - x
-            } else if orientation == .landscapeLeft {
-                // Rotate 180° from landscape-right
+                
+            case .landscapeLeft:
+                // ARKit landscape-right → Landscape-left display
+                // 180° rotation needed
+                adjustedX = x
+                adjustedY = y
+                
+            case .landscapeRight:
+                // ARKit landscape-right → Landscape-right display
+                // Actually needs 180° rotation because camera sensor is opposite direction
                 adjustedX = 1.0 - x
                 adjustedY = 1.0 - y
+                
+            @unknown default:
+                // Default to portrait transformation
+                adjustedX = 1.0 - y
+                adjustedY = x
             }
-            // If landscapeRight, no transformation needed (matches ARKit camera sensor)
         }
         // If not transformForARKit, coordinates are already correct (from CameraManager)
         
