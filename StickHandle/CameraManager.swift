@@ -21,6 +21,7 @@ class CameraManager: NSObject, ObservableObject {
     // Published property that other components can subscribe to
     // Like a React Context value or RxJS Subject
     @Published var error: CameraError?
+    @Published var previewLayerSize: CGSize = .zero  // Size of the preview layer for debug mask alignment
     
     // Combine subject to publish each video frame
     // Like an RxJS BehaviorSubject
@@ -283,6 +284,24 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         // Extract the pixel buffer from the sample buffer
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             return
+        }
+        
+        // 🔍 DIAGNOSTIC: Preview layer frame/bounds (every 30 frames to avoid spam)
+        // This needs to be on main thread since previewLayer is a UI component
+        if Int.random(in: 0..<30) == 0 {  // Sample ~1 in 30 frames
+            Task { @MainActor [weak self] in
+                if let previewLayer = self?.previewLayer {
+                    print("🔍 PREVIEW LAYER - Frame and Bounds:")
+                    print("   videoGravity = \(previewLayer.videoGravity)")
+                    print("   frame.origin = (\(previewLayer.frame.origin.x), \(previewLayer.frame.origin.y))")
+                    print("   frame.size = \(previewLayer.frame.size.width) x \(previewLayer.frame.size.height)")
+                    print("   bounds.origin = (\(previewLayer.bounds.origin.x), \(previewLayer.bounds.origin.y))")
+                    print("   bounds.size = \(previewLayer.bounds.size.width) x \(previewLayer.bounds.size.height)")
+                    if let connection = previewLayer.connection {
+                        print("   videoOrientation = \(connection.videoOrientation.rawValue)")
+                    }
+                }
+            }
         }
         
         // Publish the frame for processing

@@ -37,6 +37,12 @@ struct ARCourseView: View {
     
     var body: some View {
         GeometryReader { geometry in
+            // 🔍 DIAGNOSTIC: GeometryReader size
+            let _ = print("🔍 GEOMETRY - ARCourseView GeometryReader:")
+            let _ = print("   geometry.size.width = \(geometry.size.width)")
+            let _ = print("   geometry.size.height = \(geometry.size.height)")
+            let _ = print("   Should be PORTRAIT (width < height)")
+            
             ZStack {
                 // AR view with course lines
                 ARViewContainer(

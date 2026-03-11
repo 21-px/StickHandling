@@ -36,12 +36,41 @@ struct PuckTrackingView: View {
                 Image(uiImage: debugImage)
                     .resizable()
                     .scaledToFill()
+                    .frame(
+                        width: cameraManager.previewLayerSize.width,
+                        height: cameraManager.previewLayerSize.height
+                    )
+                    .clipped()  // Clip to frame bounds
                     .ignoresSafeArea()
                     .opacity(0.5)
+                    .background(
+                        GeometryReader { geometry in
+                            Color.clear
+                                .onAppear {
+                                    // 🔍 DIAGNOSTIC: Image view size vs preview layer size
+                                    print("🔍 DEBUG MASK IMAGE VIEW:")
+                                    print("   GeometryReader size: \(geometry.size.width) x \(geometry.size.height)")
+                                    print("   Preview layer size: \(cameraManager.previewLayerSize.width) x \(cameraManager.previewLayerSize.height)")
+                                    print("   Using preview layer size for .frame() to match exactly")
+                                }
+                                .onChange(of: geometry.size) { newSize in
+                                    print("🔍 DEBUG MASK - GeometryReader size changed: \(newSize.width) x \(newSize.height)")
+                                }
+                                .onChange(of: cameraManager.previewLayerSize) { newSize in
+                                    print("🔍 DEBUG MASK - Preview layer size changed: \(newSize.width) x \(newSize.height)")
+                                }
+                        }
+                    )
             }
             
             // UI overlays - respect safe area
             GeometryReader { geometry in
+                // 🔍 DIAGNOSTIC: GeometryReader size
+                let _ = print("🔍 GEOMETRY - PuckTrackingView GeometryReader:")
+                let _ = print("   geometry.size.width = \(geometry.size.width)")
+                let _ = print("   geometry.size.height = \(geometry.size.height)")
+                let _ = print("   Should be PORTRAIT (width < height)")
+                
                 ZStack {
                     // Invisible gesture layer for color picking
                     Color.clear
@@ -360,6 +389,7 @@ struct CameraPreview: UIViewRepresentable {
         // Get preview layer from camera manager
         let previewLayer = cameraManager.getPreviewLayer()
         view.previewLayer = previewLayer
+        view.cameraManager = cameraManager  // Pass camera manager for size updates
         view.layer.addSublayer(previewLayer)
         
         return view
@@ -367,8 +397,11 @@ struct CameraPreview: UIViewRepresentable {
     
     func updateUIView(_ uiView: CameraPreviewUIView, context: Context) {
         // Update preview layer frame when view size changes
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak cameraManager] in
             uiView.previewLayer?.frame = uiView.bounds
+            
+            // Update published size so debug mask can match
+            cameraManager?.previewLayerSize = uiView.bounds.size
         }
     }
 }
@@ -376,11 +409,15 @@ struct CameraPreview: UIViewRepresentable {
 /// Custom UIView that properly handles the preview layer frame
 class CameraPreviewUIView: UIView {
     var previewLayer: AVCaptureVideoPreviewLayer?
+    weak var cameraManager: CameraManager?  // Weak reference to avoid retain cycle
     
     override func layoutSubviews() {
         super.layoutSubviews()
         // Ensure preview layer matches view bounds
         previewLayer?.frame = bounds
+        
+        // Update CameraManager's published size so debug mask can match
+        cameraManager?.previewLayerSize = bounds.size
     }
 }
 
