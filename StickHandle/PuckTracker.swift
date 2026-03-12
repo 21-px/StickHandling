@@ -92,14 +92,13 @@ class PuckTracker: ObservableObject {
             max: CGFloat(defaults.double(forKey: brightMaxKey)).ifZero(1.0)
         )
         
-        // Load LiDAR setting (default: enabled)
-        let loadedLidarEnabled = defaults.object(forKey: lidarEnabledKey) as? Bool ?? true
-        
         // Assign to self after computing values
         self.targetHue = loadedHue
         self.targetSaturation = loadedSat
         self.targetBrightness = loadedBright
-        self.lidarEnabled = loadedLidarEnabled
+        
+        // Load LiDAR setting (default to false)
+        self.lidarEnabled = defaults.bool(forKey: lidarEnabledKey)
         
         // Create initial color cube with loaded/default values
         self.colorCubeData = Self.createColorCube(
@@ -147,11 +146,10 @@ class PuckTracker: ObservableObject {
                 
                 // Detect green regions in the image
                 if let position = self.detectGreenPuck(in: ciImage, pixelBuffer: pixelBuffer) {
-                    // Estimate distance - prefer LiDAR if enabled, fallback to camera intrinsics
+                    // Estimate distance - prefer LiDAR, fallback to camera intrinsics
                     var positionWithDistance = position
                     
-                    // Check if LiDAR is enabled and available
-                    if self.lidarEnabled, let lidarDist = lidarDistance {
+                    if let lidarDist = lidarDistance {
                         // Use LiDAR distance (most accurate!)
                         positionWithDistance = PuckPosition(
                             x: position.x,
@@ -528,15 +526,50 @@ class PuckTracker: ObservableObject {
         let centerX = sumX / CGFloat(pixelCount)
         let centerY = sumY / CGFloat(pixelCount)
         
-        // Calculate bounding box size
+        // Calculate bounding box size (for confidence checks)
         let bboxWidth = maxX - minX
         let bboxHeight = maxY - minY
-        let radius = max(bboxWidth, bboxHeight) / 2
+        let bboxRadius = max(bboxWidth, bboxHeight) / 2
+        
+        // Calculate RMS (root mean square) radius for subpixel accuracy
+        // This prevents quantization artifacts that cause distance to jump
+        var sumSquaredDistance: CGFloat = 0
+        var distanceCount: Int = 0
+        
+        for y in stride(from: 0, to: height, by: sampleStep) {
+            for x in stride(from: 0, to: width, by: sampleStep) {
+                let offset = (y * width + x) * 4
+                guard buffer[offset] > 128 else { continue }
+                
+                let r = buffer[offset]
+                let g = buffer[offset + 1]
+                let b = buffer[offset + 2]
+                
+                if r > 128 && g > 128 && b > 128 {
+                    let dx = CGFloat(x) - centerX
+                    let dy = CGFloat(y) - centerY
+                    sumSquaredDistance += dx * dx + dy * dy
+                    distanceCount += 1
+                }
+            }
+        }
+        
+        // Calculate RMS radius with subpixel precision
+        let rmsRadius = sqrt(sumSquaredDistance / CGFloat(max(distanceCount, 1)))
+        
+        // Use RMS radius for distance (better accuracy), but validate against bounding box
+        // If RMS is way off from bounding box, something's wrong - use bounding box
+        let radius: CGFloat
+        if rmsRadius > 0 && rmsRadius < CGFloat(bboxRadius) * 2.0 {
+            radius = rmsRadius
+        } else {
+            radius = CGFloat(bboxRadius)
+        }
         
         // Normalize coordinates (0-1) relative to the SCALED image
         let normalizedX = centerX / CGFloat(width)
         let normalizedY = centerY / CGFloat(height)
-        let normalizedRadius = CGFloat(radius) / CGFloat(min(width, height))
+        let normalizedRadius = radius / CGFloat(min(width, height))
         
         // SIMPLIFIED CONFIDENCE CALCULATION FOR DISTANCE TRACKING
         // At distance, downscaling makes pucks lose circular shape, so we just check:
