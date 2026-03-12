@@ -56,7 +56,7 @@ struct PuckTrackingView: View {
                             DragGesture(minimumDistance: 0)
                                 .onEnded { value in
                                     if colorPickerMode {
-                                        handleColorPick(at: value.location, viewSize: geometry.size)
+                                        handleColorPick(at: value.location)
                                     }
                                 }
                         )
@@ -294,19 +294,19 @@ struct PuckTrackingView: View {
     }
     
     /// Handle color selection when user taps on the camera feed
-    private func handleColorPick(at location: CGPoint, viewSize: CGSize) {
+    private func handleColorPick(at location: CGPoint) {
         // Show tap indicator
         lastTapLocation = location
         withAnimation {
             showTapIndicator = true
         }
         
-        // Convert screen coordinates to normalized coordinates (0-1)
-        // Note: Screen coordinates are already in portrait orientation
-        let normalizedPoint = CGPoint(
-            x: location.x / viewSize.width,
-            y: location.y / viewSize.height
-        )
+        // Convert screen coordinates to normalized camera coordinates using AVFoundation
+        // This properly accounts for .resizeAspectFill cropping and aspect ratio differences
+        let previewLayer = cameraManager.getPreviewLayer()
+        let converted = previewLayer.captureDevicePointConverted(fromLayerPoint: location)
+        // Handle offset from SwiftUI's coordinate system
+        let normalizedPoint = CGPoint(x: 1.0 - converted.y, y: 1.0 - converted.x)
         
         // Get color at that point
         guard let hsv = puckTracker.getColorAt(normalizedPoint: normalizedPoint) else {
