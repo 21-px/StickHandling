@@ -89,8 +89,14 @@ struct PuckOverlay: View {
             let diameterPixels = CGFloat((puckDiameter * focalLength) / distance)
             let radiusPixels = diameterPixels / 2.0
             
-            // Apply minimum size for visibility (at least 60px radius)
-            return max(radiusPixels, 60)
+            // ✅ BUG FIX: Convert camera sensor pixels to screen points
+            // focalLength from ARKit intrinsics is in camera sensor pixels, but SwiftUI uses points
+            // On a 3x retina display, 1 point = 3 pixels, so we need to divide by screen scale
+            let screenScale = UIScreen.main.scale
+            let radiusPoints = radiusPixels / screenScale
+            
+            // Apply minimum size for visibility (at least 15 points)
+            return max(radiusPoints, 15)
         }
         
         // Fallback: Use detected radius with scaling (original behavior)

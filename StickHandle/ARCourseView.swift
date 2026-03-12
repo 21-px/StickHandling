@@ -449,12 +449,13 @@ struct ARViewContainer: UIViewRepresentable {
             coordinateMapper.updateCamera(frame.camera.transform)
             
             // Update camera intrinsics for parent view
-            cameraIntrinsics.wrappedValue = frame.camera.intrinsics
+            let intrinsics = frame.camera.intrinsics
+            cameraIntrinsics.wrappedValue = intrinsics
             
             // IMPORTANT: Pass ARKit camera frames to puck tracker
             // This provides the live camera feed for puck tracking
             // Also pass camera intrinsics for distance estimation
-            puckTracker.processFrame(frame.capturedImage, cameraIntrinsics: frame.camera.intrinsics)
+            puckTracker.processFrame(frame.capturedImage, cameraIntrinsics: intrinsics)
         }
     }
 }

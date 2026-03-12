@@ -126,19 +126,35 @@ class PuckTracker: ObservableObject {
                 let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
                 
                 // Get image dimensions for distance estimation
-                let imageWidth = Int(ciImage.extent.width)
-                let imageHeight = Int(ciImage.extent.height)
+                // IMPORTANT: Use SCALED dimensions (160px width) because detection happens on the scaled image!
+                // The normalized radius is relative to the scaled image, not the original full-res image
+                let originalWidth = ciImage.extent.width
+                let originalHeight = ciImage.extent.height
+                let scaledWidth = 160
+                let scaledHeight = Int(160.0 / originalWidth * originalHeight)
+                
+                // Calculate scale factor for intrinsics
+                let scaleFactorX = CGFloat(scaledWidth) / originalWidth
+                let scaleFactorY = CGFloat(scaledHeight) / originalHeight
                 
                 // Detect green regions in the image
                 if let position = self.detectGreenPuck(in: ciImage, pixelBuffer: pixelBuffer) {
                     // Estimate distance if camera intrinsics are available
                     var positionWithDistance = position
                     if let intrinsics = cameraIntrinsics {
+                        // Scale the intrinsics to match the scaled image dimensions
+                        // Focal length must be scaled proportionally with image size
+                        var scaledIntrinsics = intrinsics
+                        scaledIntrinsics[0][0] = intrinsics[0][0] * Float(scaleFactorX)  // fx
+                        scaledIntrinsics[1][1] = intrinsics[1][1] * Float(scaleFactorY)  // fy
+                        scaledIntrinsics[2][0] = intrinsics[2][0] * Float(scaleFactorX)  // cx
+                        scaledIntrinsics[2][1] = intrinsics[2][1] * Float(scaleFactorY)  // cy
+                        
                         let distance = self.estimateDistance(
                             detectedRadiusNormalized: position.radius,
-                            imageWidth: imageWidth,
-                            imageHeight: imageHeight,
-                            intrinsics: intrinsics
+                            imageWidth: scaledWidth,      // ✅ Use scaled dimensions
+                            imageHeight: scaledHeight,    // ✅ Use scaled dimensions
+                            intrinsics: scaledIntrinsics  // ✅ Use scaled intrinsics
                         )
                         positionWithDistance = PuckPosition(
                             x: position.x,
@@ -217,11 +233,15 @@ class PuckTracker: ObservableObject {
         let realDiameter = Puck.diameterMeters
         
         // Pinhole camera formula: distance = (realSize * focalLength) / apparentSize
-        guard diameterPixels > 0 else { return nil }
+        guard diameterPixels > 0 else {
+            return nil
+        }
         let distance = (realDiameter * focalLength) / diameterPixels
         
         // Sanity check: puck should be between 0.1m and 10m away
-        guard distance > 0.1 && distance < 10.0 else { return nil }
+        guard distance > 0.1 && distance < 10.0 else {
+            return nil
+        }
         
         return distance
     }
@@ -251,7 +271,8 @@ class PuckTracker: ObservableObject {
             x: newX,
             y: newY,
             radius: newRadius,
-            confidence: position.confidence
+            confidence: position.confidence,
+            estimatedDistance: position.estimatedDistance  // ✅ Preserve distance!
         )
     }
     
