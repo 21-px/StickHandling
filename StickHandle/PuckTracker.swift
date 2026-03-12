@@ -39,6 +39,10 @@ class PuckTracker: ObservableObject {
     private let satMaxKey = "com.stickhandle.puck.sat.max"
     private let brightMinKey = "com.stickhandle.puck.bright.min"
     private let brightMaxKey = "com.stickhandle.puck.bright.max"
+    private let lidarEnabledKey = "com.stickhandle.puck.lidar.enabled"
+    
+    // LiDAR setting
+    @Published var lidarEnabled: Bool
     
     // Store the current frame for color picking
     nonisolated(unsafe) private var currentFrame: CVPixelBuffer?
@@ -88,10 +92,14 @@ class PuckTracker: ObservableObject {
             max: CGFloat(defaults.double(forKey: brightMaxKey)).ifZero(1.0)
         )
         
+        // Load LiDAR setting (default: enabled)
+        let loadedLidarEnabled = defaults.object(forKey: lidarEnabledKey) as? Bool ?? true
+        
         // Assign to self after computing values
         self.targetHue = loadedHue
         self.targetSaturation = loadedSat
         self.targetBrightness = loadedBright
+        self.lidarEnabled = loadedLidarEnabled
         
         // Create initial color cube with loaded/default values
         self.colorCubeData = Self.createColorCube(
@@ -139,10 +147,11 @@ class PuckTracker: ObservableObject {
                 
                 // Detect green regions in the image
                 if let position = self.detectGreenPuck(in: ciImage, pixelBuffer: pixelBuffer) {
-                    // Estimate distance - prefer LiDAR, fallback to camera intrinsics
+                    // Estimate distance - prefer LiDAR if enabled, fallback to camera intrinsics
                     var positionWithDistance = position
                     
-                    if let lidarDist = lidarDistance {
+                    // Check if LiDAR is enabled and available
+                    if self.lidarEnabled, let lidarDist = lidarDistance {
                         // Use LiDAR distance (most accurate!)
                         positionWithDistance = PuckPosition(
                             x: position.x,
@@ -206,6 +215,12 @@ class PuckTracker: ObservableObject {
     /// Enable or disable debug visualization
     func setDebugMode(_ enabled: Bool) {
         debugMode = enabled
+    }
+    
+    /// Enable or disable LiDAR distance measurement
+    func setLidarEnabled(_ enabled: Bool) {
+        lidarEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: lidarEnabledKey)
     }
     
     /// Estimate distance to puck using pinhole camera model

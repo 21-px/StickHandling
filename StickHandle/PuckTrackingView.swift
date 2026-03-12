@@ -212,11 +212,30 @@ struct PuckTrackingView: View {
                     
                     Spacer()
                     
-                    // Debug toggle button at bottom
+                    // Debug toggle buttons at bottom
                     if !colorPickerMode {
                         HStack {
                             Spacer()
                             
+                            // LiDAR toggle
+                            Button(action: {
+                                puckTracker.setLidarEnabled(!puckTracker.lidarEnabled)
+                            }) {
+                                HStack {
+                                    Image(systemName: puckTracker.lidarEnabled ? "light.beacon.max.fill" : "light.beacon.min")
+                                        .font(.title3)
+                                    Text(puckTracker.lidarEnabled ? "LiDAR On" : "LiDAR Off")
+                                        .font(.caption)
+                                }
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(puckTracker.lidarEnabled ? Color.green.opacity(0.6) : Color.gray.opacity(0.6))
+                                .cornerRadius(10)
+                            }
+                            
+                            Spacer().frame(width: 12)
+                            
+                            // Debug mask toggle
                             Button(action: {
                                 showDebugMask.toggle()
                                 puckTracker.setDebugMode(showDebugMask)
