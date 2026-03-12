@@ -246,6 +246,17 @@ struct ARViewContainer: UIViewRepresentable {
         // Configure AR session
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal]
+        
+        // Enable scene depth for LiDAR-equipped devices (iPhone 12 Pro+, iPad Pro 2020+)
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
+            config.sceneReconstruction = .meshWithClassification
+        }
+        
+        // Enable frame semantics for scene depth if available
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            config.frameSemantics.insert(.sceneDepth)
+        }
+        
         arView.session.run(config)
         
         // Store session reference so parent can control it
@@ -452,10 +463,63 @@ struct ARViewContainer: UIViewRepresentable {
             let intrinsics = frame.camera.intrinsics
             cameraIntrinsics.wrappedValue = intrinsics
             
+            // Get distance from LiDAR scene depth if available
+            var distanceAtPuck: Float? = nil
+            if let puckPosition = puckTracker.puckPosition,
+               let sceneDepth = frame.sceneDepth {
+                // Convert normalized puck position (0-1) to depth image coordinates
+                let depthWidth = CVPixelBufferGetWidth(sceneDepth.depthMap)
+                let depthHeight = CVPixelBufferGetHeight(sceneDepth.depthMap)
+                
+                // Transform coordinates for ARKit orientation
+                var depthX: Int
+                var depthY: Int
+                
+                // ARKit frames are in landscape-right, depth map matches this orientation
+                // When device is portrait, puck position is already in screen space
+                // We need to map back to camera sensor space (landscape-right)
+                switch UIDevice.current.orientation {
+                case .portrait, .unknown, .faceUp, .faceDown:
+                    // Screen portrait → Camera landscape-right
+                    // Reverse the transformation: x_screen = 1 - y_cam, y_screen = x_cam
+                    // So: x_cam = y_screen, y_cam = 1 - x_screen
+                    depthX = Int(puckPosition.y * CGFloat(depthWidth))
+                    depthY = Int((1.0 - puckPosition.x) * CGFloat(depthHeight))
+                default:
+                    // For other orientations, use direct mapping
+                    depthX = Int(puckPosition.x * CGFloat(depthWidth))
+                    depthY = Int(puckPosition.y * CGFloat(depthHeight))
+                }
+                
+                // Clamp to valid range
+                depthX = max(0, min(depthWidth - 1, depthX))
+                depthY = max(0, min(depthHeight - 1, depthY))
+                
+                // Extract depth value at puck position
+                CVPixelBufferLockBaseAddress(sceneDepth.depthMap, .readOnly)
+                defer { CVPixelBufferUnlockBaseAddress(sceneDepth.depthMap, .readOnly) }
+                
+                if let baseAddress = CVPixelBufferGetBaseAddress(sceneDepth.depthMap) {
+                    let bytesPerRow = CVPixelBufferGetBytesPerRow(sceneDepth.depthMap)
+                    let depthPointer = baseAddress.assumingMemoryBound(to: Float32.self)
+                    let offset = depthY * (bytesPerRow / MemoryLayout<Float32>.stride) + depthX
+                    let depth = depthPointer[offset]
+                    
+                    // Depth is in meters, valid if > 0
+                    if depth > 0 && depth < 10.0 {
+                        distanceAtPuck = depth
+                    }
+                }
+            }
+            
             // IMPORTANT: Pass ARKit camera frames to puck tracker
             // This provides the live camera feed for puck tracking
-            // Also pass camera intrinsics for distance estimation
-            puckTracker.processFrame(frame.capturedImage, cameraIntrinsics: intrinsics)
+            // Pass LiDAR distance if available, otherwise pass intrinsics for fallback estimation
+            puckTracker.processFrame(
+                frame.capturedImage,
+                cameraIntrinsics: intrinsics,
+                lidarDistance: distanceAtPuck
+            )
         }
     }
 }

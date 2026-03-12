@@ -103,7 +103,7 @@ class PuckTracker: ObservableObject {
     
     /// Process a video frame to detect the green puck
     /// Call this for each frame from the camera
-    nonisolated func processFrame(_ pixelBuffer: CVPixelBuffer, cameraIntrinsics: simd_float3x3? = nil) {
+    nonisolated func processFrame(_ pixelBuffer: CVPixelBuffer, cameraIntrinsics: simd_float3x3? = nil, lidarDistance: Float? = nil) {
         // Store the current frame for potential color picking
         currentFrame = pixelBuffer
         
@@ -119,7 +119,7 @@ class PuckTracker: ObservableObject {
             guard let self = self else { return }
             
             // Process on background queue to avoid blocking main thread
-            self.processingQueue.async { [weak self, pixelBuffer, cameraIntrinsics] in
+            self.processingQueue.async { [weak self, pixelBuffer, cameraIntrinsics, lidarDistance] in
                 guard let self = self else { return }
                 
                 // Convert pixel buffer to CIImage for processing
@@ -139,11 +139,21 @@ class PuckTracker: ObservableObject {
                 
                 // Detect green regions in the image
                 if let position = self.detectGreenPuck(in: ciImage, pixelBuffer: pixelBuffer) {
-                    // Estimate distance if camera intrinsics are available
+                    // Estimate distance - prefer LiDAR, fallback to camera intrinsics
                     var positionWithDistance = position
-                    if let intrinsics = cameraIntrinsics {
+                    
+                    if let lidarDist = lidarDistance {
+                        // Use LiDAR distance (most accurate!)
+                        positionWithDistance = PuckPosition(
+                            x: position.x,
+                            y: position.y,
+                            radius: position.radius,
+                            confidence: position.confidence,
+                            estimatedDistance: lidarDist
+                        )
+                    } else if let intrinsics = cameraIntrinsics {
+                        // Fallback: estimate from puck size using camera intrinsics
                         // Scale the intrinsics to match the scaled image dimensions
-                        // Focal length must be scaled proportionally with image size
                         var scaledIntrinsics = intrinsics
                         scaledIntrinsics[0][0] = intrinsics[0][0] * Float(scaleFactorX)  // fx
                         scaledIntrinsics[1][1] = intrinsics[1][1] * Float(scaleFactorY)  // fy
@@ -152,9 +162,9 @@ class PuckTracker: ObservableObject {
                         
                         let distance = self.estimateDistance(
                             detectedRadiusNormalized: position.radius,
-                            imageWidth: scaledWidth,      // ✅ Use scaled dimensions
-                            imageHeight: scaledHeight,    // ✅ Use scaled dimensions
-                            intrinsics: scaledIntrinsics  // ✅ Use scaled intrinsics
+                            imageWidth: scaledWidth,
+                            imageHeight: scaledHeight,
+                            intrinsics: scaledIntrinsics
                         )
                         positionWithDistance = PuckPosition(
                             x: position.x,
