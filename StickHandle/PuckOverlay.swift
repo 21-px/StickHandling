@@ -19,6 +19,16 @@ struct PuckOverlay: View {
     var orientation: UIDeviceOrientation = .portrait
     var cameraIntrinsics: simd_float3x3? = nil // For distance-based sizing
     
+    /// Formatted distance text (always shows value, defaults to 0ft if unavailable)
+    private var distanceText: String {
+        if let distance = position.estimatedDistance {
+            let distanceFeet = distance * 3.28084 // Convert meters to feet
+            return String(format: "%.1fft", distanceFeet)
+        } else {
+            return "0ft"
+        }
+    }
+    
     var body: some View {
         let screenPosition = position.toScreenCoordinates(
             viewSize: viewSize,
@@ -47,17 +57,15 @@ struct PuckOverlay: View {
                 .frame(width: 12, height: 12)
                 .shadow(color: .red, radius: 4, x: 0, y: 0)
             
-            // Debug: Show estimated distance
-            if let distance = position.estimatedDistance {
-                Text(String(format: "%.2fm", distance))
-                    .font(.caption2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
-                    .padding(4)
-                    .background(Color.black.opacity(0.7))
-                    .cornerRadius(4)
-                    .offset(y: displayRadius / 2 + 20)
-            }
+            // Show estimated distance (always display, use 0ft if unavailable)
+            Text(distanceText)
+                .font(.caption2)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+                .padding(4)
+                .background(Color.black.opacity(0.7))
+                .cornerRadius(4)
+                .offset(y: displayRadius / 2 + 20)
         }
         .position(screenPosition)
     }
