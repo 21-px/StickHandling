@@ -99,12 +99,14 @@ struct PuckOverlay: View {
             return max(radiusPoints, 15)
         }
         
-        // Fallback: Use detected radius with scaling (original behavior)
-        let radiusInPixels = position.radius * min(viewSize.width, viewSize.height)
+        // Fallback: Use detected radius directly from blob detection
+        // The radius from PuckPosition is already normalized and accurate from edge fitting
+        let smallerDimension = min(viewSize.width, viewSize.height)
+        let radiusInPoints = position.radius * smallerDimension
         
-        // Make circle large enough to clearly surround the puck
-        // Multiply by 3 to ensure it encompasses the puck, minimum 100px
-        let displayRadius = max(radiusInPixels * 3, 100)
+        // Use detected size directly - it should match the visible puck edge
+        // Only apply minimum size for visibility (tiny distant pucks)
+        let displayRadius = max(radiusInPoints * 2.0, 20) // Diameter = 2 × radius, min 20 points
         
         return displayRadius
     }

@@ -751,16 +751,27 @@ class PuckTracker: ObservableObject {
         var centerY = initialCenter.y
         var radius: CGFloat = 0
         
-        // Iterative refinement (3 iterations is usually enough)
-        for _ in 0..<3 {
+        // Iterative refinement (5 iterations for better accuracy)
+        for iteration in 0..<5 {
             // Calculate distances from current center estimate
             var sumDist: CGFloat = 0
+            var validPoints = 0
+            
             for point in edgePixels {
                 let dx = CGFloat(point.x) - centerX
                 let dy = CGFloat(point.y) - centerY
-                sumDist += sqrt(dx * dx + dy * dy)
+                let dist = sqrt(dx * dx + dy * dy)
+                
+                // On first iteration, accept all points
+                // On subsequent iterations, only use inliers (within tolerance)
+                if iteration == 0 || (iteration > 0 && abs(dist - radius) < max(radius * 0.4, 3.0)) {
+                    sumDist += dist
+                    validPoints += 1
+                }
             }
-            radius = sumDist / CGFloat(edgePixels.count)
+            
+            guard validPoints > 0 else { break }
+            radius = sumDist / CGFloat(validPoints)
             
             // Update center estimate using weighted average
             var sumX: CGFloat = 0
@@ -774,10 +785,12 @@ class PuckTracker: ObservableObject {
                 let dy = py - centerY
                 let dist = sqrt(dx * dx + dy * dy)
                 
-                // Weight by inverse distance from expected radius
-                // Points closer to the expected circle get higher weight
                 guard dist > 0.1 else { continue }
-                let weight = 1.0 / (1.0 + abs(dist - radius))
+                
+                // Weight by inverse distance from expected radius
+                // Points closer to the expected circle get MUCH higher weight
+                let distanceFromCircle = abs(dist - radius)
+                let weight = 1.0 / (1.0 + distanceFromCircle * distanceFromCircle) // Squared for stronger weighting
                 
                 sumX += px * weight
                 sumY += py * weight
@@ -786,14 +799,23 @@ class PuckTracker: ObservableObject {
             
             guard totalWeight > 0 else { break }
             
-            centerX = sumX / totalWeight
-            centerY = sumY / totalWeight
+            let newCenterX = sumX / totalWeight
+            let newCenterY = sumY / totalWeight
+            
+            // Check for convergence (if center barely moves, we're done)
+            let centerShift = sqrt(pow(newCenterX - centerX, 2) + pow(newCenterY - centerY, 2))
+            centerX = newCenterX
+            centerY = newCenterY
+            
+            if centerShift < 0.1 {
+                break // Converged!
+            }
         }
         
-        // Validate the fit quality
-        // Check how many edge pixels are close to the fitted circle
-        var inliers = 0
-        let tolerance = max(radius * 0.3, 2.0) // 30% tolerance or 2 pixels, whichever is larger
+        // Final radius calculation using only inliers for maximum accuracy
+        var finalRadiusSum: CGFloat = 0
+        var inlierCount = 0
+        let tolerance = max(radius * 0.3, 2.0) // 30% tolerance or 2 pixels
         
         for point in edgePixels {
             let dx = CGFloat(point.x) - centerX
@@ -801,15 +823,19 @@ class PuckTracker: ObservableObject {
             let dist = sqrt(dx * dx + dy * dy)
             
             if abs(dist - radius) < tolerance {
-                inliers += 1
+                finalRadiusSum += dist
+                inlierCount += 1
             }
         }
         
         // Need at least 1/3 of edge pixels to be inliers for a good fit
-        let inlierRatio = CGFloat(inliers) / CGFloat(edgePixels.count)
+        let inlierRatio = CGFloat(inlierCount) / CGFloat(edgePixels.count)
         guard inlierRatio >= 0.33 else { return nil }
         
-        return (center: CGPoint(x: centerX, y: centerY), radius: radius)
+        // Use average of inlier distances as final radius for accuracy
+        let finalRadius = inlierCount > 0 ? finalRadiusSum / CGFloat(inlierCount) : radius
+        
+        return (center: CGPoint(x: centerX, y: centerY), radius: finalRadius)
     }
     
     /// Create a binary mask highlighting green regions
