@@ -365,30 +365,30 @@ class PuckTracker: ObservableObject {
     /// Update the target color for puck detection
     /// - Parameter hsv: The HSV color to target
     func updateTargetColor(hsv: (h: CGFloat, s: CGFloat, v: CGFloat)) {
-        // Create a WIDE range around the selected color for robust tracking in various lighting conditions
-        // Wider ranges help handle shadows, highlights, different ambient lighting, and reflections
+        // Create adaptive ranges around the picked color
+        // This handles surface variations like shadows, highlights, and reflections
         
-        // Hue: ±0.15 (±54°) - much wider to handle color shifts from lighting
-        let hueRange: CGFloat = 0.05
+        // Hue: ±0.08 (±29°) - wide enough for lighting variations but not so wide it picks up other colors
+        let hueRange: CGFloat = 0.08
         
-        // Saturation: Accept from 0.1 to 1.0 - handles both washed-out colors (bright light) 
-        // and highly saturated colors (normal conditions)
-        // This allows the same color to be tracked whether it's in shadow, direct light, or reflection
-        let satMin: CGFloat = 0.4  // Very low threshold - even desaturated colors match
-        let satMax: CGFloat = 0.8  // Always accept up to almost fully saturated
+        // Saturation: Range around picked value
+        // Go lower to catch shadows/highlights (which desaturate), higher to catch saturated areas
+        let satRange: CGFloat = 0.35
+        let satMin = max(0.0, hsv.s - satRange)
+        let satMax = min(1.0, hsv.s + satRange)
         
-        // Brightness: Accept from 0.2 to 1.0 - handles shadows (darker) and highlights (brighter)
-        // This is critical for tracking across varying lighting conditions
-        let brightMin: CGFloat = 0.4  // Low threshold for shadows
-        let brightMax: CGFloat = 0.8  // Always accept up to almost fully bright
+        // Brightness: Range around picked value
+        // Go lower to catch shadows, higher to catch bright spots/reflections
+        let brightRange: CGFloat = 0.35
+        let brightMin = max(0.0, hsv.v - brightRange)
+        let brightMax = min(1.0, hsv.v + brightRange)
         
         targetHue = (
             min: max(0, hsv.h - hueRange),
             max: min(1, hsv.h + hueRange)
         )
         
-        // Use absolute ranges for saturation and brightness instead of ranges around picked value
-        // This prevents the ranges from becoming too restrictive based on the picked sample
+        // Use adaptive ranges centered on picked color
         targetSaturation = (
             min: satMin,
             max: satMax
@@ -398,6 +398,12 @@ class PuckTracker: ObservableObject {
             min: brightMin,
             max: brightMax
         )
+        
+        // Debug print to see what ranges we're using
+        print("🎯 Target HSV Ranges:")
+        print("  Hue: \(targetHue.min) - \(targetHue.max) (picked: \(hsv.h))")
+        print("  Sat: \(targetSaturation.min) - \(targetSaturation.max) (picked: \(hsv.s))")
+        print("  Val: \(targetBrightness.min) - \(targetBrightness.max) (picked: \(hsv.v))")
         
         // Save to UserDefaults
         let defaults = UserDefaults.standard
