@@ -369,18 +369,18 @@ class PuckTracker: ObservableObject {
         // Wider ranges help handle shadows, highlights, different ambient lighting, and reflections
         
         // Hue: ±0.15 (±54°) - much wider to handle color shifts from lighting
-        let hueRange: CGFloat = 0.15
+        let hueRange: CGFloat = 0.05
         
         // Saturation: Accept from 0.1 to 1.0 - handles both washed-out colors (bright light) 
         // and highly saturated colors (normal conditions)
         // This allows the same color to be tracked whether it's in shadow, direct light, or reflection
-        let satMin: CGFloat = 0.2  // Very low threshold - even desaturated colors match
-        let satMax: CGFloat = 0.98  // Always accept up to fully saturated
+        let satMin: CGFloat = 0.4  // Very low threshold - even desaturated colors match
+        let satMax: CGFloat = 0.8  // Always accept up to almost fully saturated
         
         // Brightness: Accept from 0.2 to 1.0 - handles shadows (darker) and highlights (brighter)
         // This is critical for tracking across varying lighting conditions
-        let brightMin: CGFloat = 0.2  // Low threshold for shadows
-        let brightMax: CGFloat = 0.98  // Always accept up to fully bright
+        let brightMin: CGFloat = 0.4  // Low threshold for shadows
+        let brightMax: CGFloat = 0.8  // Always accept up to almost fully bright
         
         targetHue = (
             min: max(0, hsv.h - hueRange),
@@ -436,11 +436,9 @@ class PuckTracker: ObservableObject {
             if let fullResMask = fullResMask {
                 if let cgImage = ciContext.createCGImage(fullResMask, from: fullResMask.extent) {
                     Task { @MainActor [weak self] in
-                        // FIX: Use screen scale for retina displays
-                        // Without scale parameter, UIImage defaults to 1.0 which causes incorrect rendering on retina displays
-                        // The image gets cropped/offset when .scaledToFill() is applied
-                        let screenScale = UIScreen.main.scale
-                        self?.debugImage = UIImage(cgImage: cgImage, scale: screenScale, orientation: .up)
+                        // Use scale of 1.0 so SwiftUI interprets the image at its full pixel dimensions
+                        // This allows .scaledToFill() to properly stretch the image edge-to-edge
+                        self?.debugImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: .up)
                     }
                 }
             }
@@ -502,7 +500,8 @@ class PuckTracker: ObservableObject {
         var maxY: Int = 0
         
         // Collect edge pixels for circle fitting
-        var edgePixels: [(x: Int, y: Int)] = []
+        // Store edge pixels with their strength (number of black neighbors)
+        var edgePixels: [(x: Int, y: Int, strength: Int)] = []
         
         // Use stride for faster iteration
         for y in stride(from: 0, to: height, by: sampleStep) {
@@ -530,11 +529,21 @@ class PuckTracker: ObservableObject {
                     // Check if this is an edge pixel (has at least one non-white neighbor)
                     let isEdge = isEdgePixel(buffer: buffer, x: x, y: y, width: width, height: height, step: sampleStep)
                     if isEdge {
-                        edgePixels.append((x, y))
+                        // Calculate edge strength to prioritize outer edges
+                        let strength = edgeStrength(buffer: buffer, x: x, y: y, width: width, height: height, step: sampleStep)
+                        edgePixels.append((x, y, strength))
                     }
                 }
             }
         }
+        
+        // Filter to keep only strong edge pixels (outer boundary)
+        // Pixels with more black neighbors are more likely to be on the outer edge
+        // Keep pixels with at least 2 black neighbors (out of 8 total)
+        let filteredEdgePixels = edgePixels.filter { $0.strength >= 2 }.map { (x: $0.x, y: $0.y) }
+        
+        // Use all edge pixels if we don't have enough strong ones
+        let finalEdgePixels = filteredEdgePixels.count >= 5 ? filteredEdgePixels : edgePixels.map { (x: $0.x, y: $0.y) }
         
         // Need at least some pixels to consider it a detection
         // Low threshold for distance tracking, but not so low that noise triggers false positives
@@ -550,8 +559,8 @@ class PuckTracker: ObservableObject {
         
         // Try circle fitting if we have edge pixels
         var fittedCircle: (center: CGPoint, radius: CGFloat)?
-        if edgePixels.count >= 5 { // Need at least 5 points to fit a circle
-            fittedCircle = fitCircleToEdges(edgePixels: edgePixels, initialCenter: CGPoint(x: centerX, y: centerY))
+        if finalEdgePixels.count >= 5 { // Need at least 5 points to fit a circle
+            fittedCircle = fitCircleToEdges(edgePixels: finalEdgePixels, initialCenter: CGPoint(x: centerX, y: centerY))
         }
         
         // Use fitted circle if available and reasonable, otherwise fall back to centroid method
@@ -579,9 +588,10 @@ class PuckTracker: ObservableObject {
                 let bboxHeight = maxY - minY
                 let bboxRadius = max(bboxWidth, bboxHeight) / 2
                 
-                // Calculate RMS radius
+                // Calculate RMS radius using outer edge pixels if available
                 let rmsRadius = calculateRMSRadius(buffer: buffer, width: width, height: height, 
-                                                   centerX: centerX, centerY: centerY, sampleStep: sampleStep)
+                                                   centerX: centerX, centerY: centerY, sampleStep: sampleStep,
+                                                   edgePixels: finalEdgePixels.isEmpty ? nil : finalEdgePixels)
                 
                 if rmsRadius > 0 && rmsRadius < CGFloat(bboxRadius) * 2.0 {
                     finalRadius = rmsRadius
@@ -599,9 +609,10 @@ class PuckTracker: ObservableObject {
             let bboxHeight = maxY - minY
             let bboxRadius = max(bboxWidth, bboxHeight) / 2
             
-            // Calculate RMS radius
+            // Calculate RMS radius using outer edge pixels if available
             let rmsRadius = calculateRMSRadius(buffer: buffer, width: width, height: height, 
-                                               centerX: centerX, centerY: centerY, sampleStep: sampleStep)
+                                               centerX: centerX, centerY: centerY, sampleStep: sampleStep,
+                                               edgePixels: finalEdgePixels.isEmpty ? nil : finalEdgePixels)
             
             if rmsRadius > 0 && rmsRadius < CGFloat(bboxRadius) * 2.0 {
                 finalRadius = rmsRadius
@@ -685,10 +696,18 @@ class PuckTracker: ObservableObject {
         return position
     }
     
-    /// Check if a pixel is on the edge of the colored region
+    /// Check if a pixel is on the OUTER edge of the colored region
+    /// Returns: (isEdge, edgeStrength) where edgeStrength indicates how many black neighbors
     nonisolated private func isEdgePixel(buffer: UnsafeMutablePointer<UInt8>, x: Int, y: Int, width: Int, height: Int, step: Int) -> Bool {
-        // A pixel is an edge if it's white but has at least one non-white neighbor
-        let directions = [(-step, 0), (step, 0), (0, -step), (0, step)] // Left, right, up, down
+        // A pixel is on the OUTER edge if it has at least one non-white neighbor
+        // Check all 8 directions (including diagonals) for more robust edge detection
+        let directions = [
+            (-step, 0), (step, 0), (0, -step), (0, step),  // Orthogonal
+            (-step, -step), (-step, step), (step, -step), (step, step)  // Diagonals
+        ]
+        
+        var blackNeighborCount = 0
+        var totalNeighbors = 0
         
         for (dx, dy) in directions {
             let nx = x + dx
@@ -696,41 +715,91 @@ class PuckTracker: ObservableObject {
             
             // Check bounds
             guard nx >= 0 && nx < width && ny >= 0 && ny < height else {
-                return true // Border pixels are considered edges
+                blackNeighborCount += 1  // Border pixels count as black neighbors
+                totalNeighbors += 1
+                continue
             }
             
             let offset = (ny * width + nx) * 4
             let neighborR = buffer[offset]
             
+            totalNeighbors += 1
+            
             // If neighbor is black (not part of blob), this is an edge
             if neighborR < 128 {
-                return true
+                blackNeighborCount += 1
             }
         }
         
-        return false
+        // Only consider pixels with at least one black neighbor as edge pixels
+        // This ensures we're detecting the actual boundary
+        return blackNeighborCount > 0
+    }
+    
+    /// Calculate edge strength (how many neighbors are background)
+    /// Higher value = more likely to be outer edge
+    nonisolated private func edgeStrength(buffer: UnsafeMutablePointer<UInt8>, x: Int, y: Int, width: Int, height: Int, step: Int) -> Int {
+        let directions = [
+            (-step, 0), (step, 0), (0, -step), (0, step),  // Orthogonal
+            (-step, -step), (-step, step), (step, -step), (step, step)  // Diagonals
+        ]
+        
+        var blackNeighborCount = 0
+        
+        for (dx, dy) in directions {
+            let nx = x + dx
+            let ny = y + dy
+            
+            guard nx >= 0 && nx < width && ny >= 0 && ny < height else {
+                blackNeighborCount += 1
+                continue
+            }
+            
+            let offset = (ny * width + nx) * 4
+            let neighborR = buffer[offset]
+            
+            if neighborR < 128 {
+                blackNeighborCount += 1
+            }
+        }
+        
+        return blackNeighborCount
     }
     
     /// Calculate RMS (root mean square) radius for subpixel accuracy
+    /// Optionally uses edge pixels for more accurate outer boundary detection
     nonisolated private func calculateRMSRadius(buffer: UnsafeMutablePointer<UInt8>, width: Int, height: Int, 
-                                                centerX: CGFloat, centerY: CGFloat, sampleStep: Int) -> CGFloat {
+                                                centerX: CGFloat, centerY: CGFloat, sampleStep: Int, 
+                                                edgePixels: [(x: Int, y: Int)]? = nil) -> CGFloat {
         var sumSquaredDistance: CGFloat = 0
         var distanceCount: Int = 0
         
-        for y in stride(from: 0, to: height, by: sampleStep) {
-            for x in stride(from: 0, to: width, by: sampleStep) {
-                let offset = (y * width + x) * 4
-                guard buffer[offset] > 128 else { continue }
-                
-                let r = buffer[offset]
-                let g = buffer[offset + 1]
-                let b = buffer[offset + 2]
-                
-                if r > 128 && g > 128 && b > 128 {
-                    let dx = CGFloat(x) - centerX
-                    let dy = CGFloat(y) - centerY
-                    sumSquaredDistance += dx * dx + dy * dy
-                    distanceCount += 1
+        // If edge pixels are provided, use them for more accurate outer boundary
+        if let edges = edgePixels, edges.count >= 5 {
+            for edge in edges {
+                let dx = CGFloat(edge.x) - centerX
+                let dy = CGFloat(edge.y) - centerY
+                let distanceSquared = dx * dx + dy * dy
+                sumSquaredDistance += distanceSquared
+                distanceCount += 1
+            }
+        } else {
+            // Fallback: sample all white pixels
+            for y in stride(from: 0, to: height, by: sampleStep) {
+                for x in stride(from: 0, to: width, by: sampleStep) {
+                    let offset = (y * width + x) * 4
+                    guard buffer[offset] > 128 else { continue }
+                    
+                    let r = buffer[offset]
+                    let g = buffer[offset + 1]
+                    let b = buffer[offset + 2]
+                    
+                    if r > 128 && g > 128 && b > 128 {
+                        let dx = CGFloat(x) - centerX
+                        let dy = CGFloat(y) - centerY
+                        sumSquaredDistance += dx * dx + dy * dy
+                        distanceCount += 1
+                    }
                 }
             }
         }
@@ -856,6 +925,9 @@ class PuckTracker: ObservableObject {
             inputImage = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         }
         
+        // Store original extent to restore after morphological operations
+        let originalExtent = inputImage.extent
+        
         // Use cached color cube data instead of recreating every frame
         let cubeSize = 64
         
@@ -864,7 +936,55 @@ class PuckTracker: ObservableObject {
         colorCube?.setValue(colorCubeData, forKey: "inputCubeData")
         colorCube?.setValue(inputImage, forKey: kCIInputImageKey)
         
-        return colorCube?.outputImage
+        guard let maskImage = colorCube?.outputImage else {
+            return nil
+        }
+        
+        // ✅ FILL HOLES: Apply morphological closing to fill in hollow pucks
+        // This handles pucks with text, logos, or center holes
+        // Step 1: Dilate (expand white regions)
+        // Use radius of 10 pixels for 160px image (scales proportionally)
+        guard let dilated = applyMorphologicalDilation(to: maskImage, radius: 30) else {
+            return maskImage // Fallback to original mask if dilation fails
+        }
+        
+        // Step 2: Erode (shrink back to original size, but holes are now filled)
+        guard let filled = applyMorphologicalErosion(to: dilated, radius: 30) else {
+            return maskImage // Fallback to original mask if erosion fails
+        }
+        
+        // CRITICAL: Restore original extent after morphological operations
+        // Morphological filters change the image extent, causing the mask to be cropped
+        // We need to crop back to the original extent to ensure edge-to-edge display
+        let restoredExtent = filled.cropped(to: originalExtent)
+        
+        return restoredExtent
+    }
+    
+    /// Apply morphological dilation (expand white regions)
+    /// This makes the blob bigger, closing small gaps and holes
+    nonisolated private func applyMorphologicalDilation(to image: CIImage, radius: CGFloat) -> CIImage? {
+        // Use CIMorphologyMaximum for proper morphological dilation
+        guard let dilateFilter = CIFilter(name: "CIMorphologyMaximum") else {
+            return nil
+        }
+        dilateFilter.setValue(image, forKey: kCIInputImageKey)
+        dilateFilter.setValue(radius, forKey: kCIInputRadiusKey)
+        
+        return dilateFilter.outputImage
+    }
+    
+    /// Apply morphological erosion (shrink white regions)
+    /// This makes the blob smaller, useful for cleanup
+    nonisolated private func applyMorphologicalErosion(to image: CIImage, radius: CGFloat) -> CIImage? {
+        // Use CIMorphologyMinimum for proper morphological erosion
+        guard let erodeFilter = CIFilter(name: "CIMorphologyMinimum") else {
+            return nil
+        }
+        erodeFilter.setValue(image, forKey: kCIInputImageKey)
+        erodeFilter.setValue(radius, forKey: kCIInputRadiusKey)
+        
+        return erodeFilter.outputImage
     }
     
     /// Create a color lookup table that passes through the target color and blacks out other colors

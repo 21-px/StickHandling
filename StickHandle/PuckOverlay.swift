@@ -70,9 +70,10 @@ struct PuckOverlay: View {
         .position(screenPosition)
     }
     
-    /// Calculate display radius for the puck overlay
+    /// Calculate display diameter for the puck overlay
     /// If distance is available, projects the real 3-inch puck diameter onto screen
     /// Otherwise, falls back to detected size with scaling
+    /// NOTE: Returns DIAMETER (not radius) because Circle().frame(width:height:) expects diameter
     private func calculateDisplayRadius() -> CGFloat {
         // If we have distance and camera intrinsics, calculate precise screen size
         if let distance = position.estimatedDistance,
@@ -87,16 +88,15 @@ struct PuckOverlay: View {
             // apparentSize = (realSize * focalLength) / distance
             let puckDiameter = Puck.diameterMeters
             let diameterPixels = CGFloat((puckDiameter * focalLength) / distance)
-            let radiusPixels = diameterPixels / 2.0
             
             // ✅ BUG FIX: Convert camera sensor pixels to screen points
             // focalLength from ARKit intrinsics is in camera sensor pixels, but SwiftUI uses points
             // On a 3x retina display, 1 point = 3 pixels, so we need to divide by screen scale
             let screenScale = UIScreen.main.scale
-            let radiusPoints = radiusPixels / screenScale
+            let diameterPoints = diameterPixels / screenScale
             
-            // Apply minimum size for visibility (at least 15 points)
-            return max(radiusPoints, 15)
+            // Apply minimum size for visibility (at least 30 points diameter)
+            return max(diameterPoints, 30)
         }
         
         // Fallback: Use detected radius directly from blob detection
@@ -104,10 +104,11 @@ struct PuckOverlay: View {
         let smallerDimension = min(viewSize.width, viewSize.height)
         let radiusInPoints = position.radius * smallerDimension
         
-        // Use detected size directly - it should match the visible puck edge
-        // Only apply minimum size for visibility (tiny distant pucks)
-        let displayRadius = max(radiusInPoints * 2.0, 20) // Diameter = 2 × radius, min 20 points
+        // Convert radius to diameter for Circle frame
+        // position.radius is the actual radius, so diameter = 2 × radius
+        let displayDiameter = radiusInPoints * 2.0
         
-        return displayRadius
+        // Apply minimum size for visibility (tiny distant pucks)
+        return max(displayDiameter, 30) // Minimum 30 points diameter
     }
 }
