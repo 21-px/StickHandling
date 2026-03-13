@@ -501,6 +501,9 @@ class PuckTracker: ObservableObject {
         var minY: Int = height
         var maxY: Int = 0
         
+        // Collect edge pixels for circle fitting
+        var edgePixels: [(x: Int, y: Int)] = []
+        
         // Use stride for faster iteration
         for y in stride(from: 0, to: height, by: sampleStep) {
             for x in stride(from: 0, to: width, by: sampleStep) {
@@ -523,6 +526,12 @@ class PuckTracker: ObservableObject {
                     maxX = max(maxX, x)
                     minY = min(minY, y)
                     maxY = max(maxY, y)
+                    
+                    // Check if this is an edge pixel (has at least one non-white neighbor)
+                    let isEdge = isEdgePixel(buffer: buffer, x: x, y: y, width: width, height: height, step: sampleStep)
+                    if isEdge {
+                        edgePixels.append((x, y))
+                    }
                 }
             }
         }
@@ -535,54 +544,76 @@ class PuckTracker: ObservableObject {
             return nil
         }
         
-        // Calculate center of mass in scaled image space
+        // Calculate center of mass in scaled image space (initial estimate)
         let centerX = sumX / CGFloat(pixelCount)
         let centerY = sumY / CGFloat(pixelCount)
         
-        // Calculate bounding box size (for confidence checks)
-        let bboxWidth = maxX - minX
-        let bboxHeight = maxY - minY
-        let bboxRadius = max(bboxWidth, bboxHeight) / 2
+        // Try circle fitting if we have edge pixels
+        var fittedCircle: (center: CGPoint, radius: CGFloat)?
+        if edgePixels.count >= 5 { // Need at least 5 points to fit a circle
+            fittedCircle = fitCircleToEdges(edgePixels: edgePixels, initialCenter: CGPoint(x: centerX, y: centerY))
+        }
         
-        // Calculate RMS (root mean square) radius for subpixel accuracy
-        // This prevents quantization artifacts that cause distance to jump
-        var sumSquaredDistance: CGFloat = 0
-        var distanceCount: Int = 0
+        // Use fitted circle if available and reasonable, otherwise fall back to centroid method
+        let finalCenterX: CGFloat
+        let finalCenterY: CGFloat
+        let finalRadius: CGFloat
+        var isPartialCircle = false
         
-        for y in stride(from: 0, to: height, by: sampleStep) {
-            for x in stride(from: 0, to: width, by: sampleStep) {
-                let offset = (y * width + x) * 4
-                guard buffer[offset] > 128 else { continue }
+        if let fitted = fittedCircle {
+            // Validate fitted circle is reasonable
+            let fittedNormRadius = fitted.radius / CGFloat(min(width, height))
+            if fittedNormRadius > 0.005 && fittedNormRadius < 0.6 {
+                // Fitted circle is reasonable - use it!
+                finalCenterX = fitted.center.x
+                finalCenterY = fitted.center.y
+                finalRadius = fitted.radius
+                isPartialCircle = true // Mark that we used edge-based detection
+            } else {
+                // Fitted circle is unreasonable, fall back to centroid
+                finalCenterX = centerX
+                finalCenterY = centerY
                 
-                let r = buffer[offset]
-                let g = buffer[offset + 1]
-                let b = buffer[offset + 2]
+                // Calculate bounding box size (for confidence checks)
+                let bboxWidth = maxX - minX
+                let bboxHeight = maxY - minY
+                let bboxRadius = max(bboxWidth, bboxHeight) / 2
                 
-                if r > 128 && g > 128 && b > 128 {
-                    let dx = CGFloat(x) - centerX
-                    let dy = CGFloat(y) - centerY
-                    sumSquaredDistance += dx * dx + dy * dy
-                    distanceCount += 1
+                // Calculate RMS radius
+                let rmsRadius = calculateRMSRadius(buffer: buffer, width: width, height: height, 
+                                                   centerX: centerX, centerY: centerY, sampleStep: sampleStep)
+                
+                if rmsRadius > 0 && rmsRadius < CGFloat(bboxRadius) * 2.0 {
+                    finalRadius = rmsRadius
+                } else {
+                    finalRadius = CGFloat(bboxRadius)
                 }
+            }
+        } else {
+            // No fitted circle - use traditional centroid method
+            finalCenterX = centerX
+            finalCenterY = centerY
+            
+            // Calculate bounding box size (for confidence checks)
+            let bboxWidth = maxX - minX
+            let bboxHeight = maxY - minY
+            let bboxRadius = max(bboxWidth, bboxHeight) / 2
+            
+            // Calculate RMS radius
+            let rmsRadius = calculateRMSRadius(buffer: buffer, width: width, height: height, 
+                                               centerX: centerX, centerY: centerY, sampleStep: sampleStep)
+            
+            if rmsRadius > 0 && rmsRadius < CGFloat(bboxRadius) * 2.0 {
+                finalRadius = rmsRadius
+            } else {
+                finalRadius = CGFloat(bboxRadius)
             }
         }
         
-        // Calculate RMS radius with subpixel precision
-        let rmsRadius = sqrt(sumSquaredDistance / CGFloat(max(distanceCount, 1)))
-        
-        // Use RMS radius for distance (better accuracy), but validate against bounding box
-        // If RMS is way off from bounding box, something's wrong - use bounding box
-        let radius: CGFloat
-        if rmsRadius > 0 && rmsRadius < CGFloat(bboxRadius) * 2.0 {
-            radius = rmsRadius
-        } else {
-            radius = CGFloat(bboxRadius)
-        }
-        
         // Normalize coordinates (0-1) relative to the SCALED image
-        let normalizedX = centerX / CGFloat(width)
-        let normalizedY = centerY / CGFloat(height)
-        let normalizedRadius = radius / CGFloat(min(width, height))
+        let normalizedX = finalCenterX / CGFloat(width)
+        let normalizedY = finalCenterY / CGFloat(height)
+        let normalizedRadius = finalRadius / CGFloat(min(width, height))
         
         // SIMPLIFIED CONFIDENCE CALCULATION FOR DISTANCE TRACKING
         // At distance, downscaling makes pucks lose circular shape, so we just check:
@@ -621,6 +652,15 @@ class PuckTracker: ObservableObject {
             confidence = 0.9 - (sizeRatio * 0.4) // 0.9 to 0.5
         }
         
+        // Boost confidence if we detected a partial circle (edge-based fitting)
+        if isPartialCircle {
+            confidence = min(1.0, confidence * 1.2) // 20% confidence boost for circular edge detection
+        }
+        
+        // Calculate bounding box for aspect ratio check
+        let bboxWidth = maxX - minX
+        let bboxHeight = maxY - minY
+        
         // Check aspect ratio as a basic sanity check (not too elongated)
         // This helps filter out obvious non-puck shapes without requiring perfect circles
         let aspectRatio = CGFloat(bboxWidth) / CGFloat(max(bboxHeight, 1))
@@ -643,6 +683,133 @@ class PuckTracker: ObservableObject {
         )
         
         return position
+    }
+    
+    /// Check if a pixel is on the edge of the colored region
+    nonisolated private func isEdgePixel(buffer: UnsafeMutablePointer<UInt8>, x: Int, y: Int, width: Int, height: Int, step: Int) -> Bool {
+        // A pixel is an edge if it's white but has at least one non-white neighbor
+        let directions = [(-step, 0), (step, 0), (0, -step), (0, step)] // Left, right, up, down
+        
+        for (dx, dy) in directions {
+            let nx = x + dx
+            let ny = y + dy
+            
+            // Check bounds
+            guard nx >= 0 && nx < width && ny >= 0 && ny < height else {
+                return true // Border pixels are considered edges
+            }
+            
+            let offset = (ny * width + nx) * 4
+            let neighborR = buffer[offset]
+            
+            // If neighbor is black (not part of blob), this is an edge
+            if neighborR < 128 {
+                return true
+            }
+        }
+        
+        return false
+    }
+    
+    /// Calculate RMS (root mean square) radius for subpixel accuracy
+    nonisolated private func calculateRMSRadius(buffer: UnsafeMutablePointer<UInt8>, width: Int, height: Int, 
+                                                centerX: CGFloat, centerY: CGFloat, sampleStep: Int) -> CGFloat {
+        var sumSquaredDistance: CGFloat = 0
+        var distanceCount: Int = 0
+        
+        for y in stride(from: 0, to: height, by: sampleStep) {
+            for x in stride(from: 0, to: width, by: sampleStep) {
+                let offset = (y * width + x) * 4
+                guard buffer[offset] > 128 else { continue }
+                
+                let r = buffer[offset]
+                let g = buffer[offset + 1]
+                let b = buffer[offset + 2]
+                
+                if r > 128 && g > 128 && b > 128 {
+                    let dx = CGFloat(x) - centerX
+                    let dy = CGFloat(y) - centerY
+                    sumSquaredDistance += dx * dx + dy * dy
+                    distanceCount += 1
+                }
+            }
+        }
+        
+        return sqrt(sumSquaredDistance / CGFloat(max(distanceCount, 1)))
+    }
+    
+    /// Fit a circle to edge pixels using least squares optimization
+    /// This allows detecting partially occluded pucks by fitting a circle to visible arc
+    /// Returns: (center, radius) of fitted circle, or nil if fitting fails
+    nonisolated private func fitCircleToEdges(edgePixels: [(x: Int, y: Int)], initialCenter: CGPoint) -> (center: CGPoint, radius: CGFloat)? {
+        guard edgePixels.count >= 5 else { return nil }
+        
+        // Use algebraic circle fitting (Pratt method)
+        // This is fast and works well for partial circles
+        
+        var centerX = initialCenter.x
+        var centerY = initialCenter.y
+        var radius: CGFloat = 0
+        
+        // Iterative refinement (3 iterations is usually enough)
+        for _ in 0..<3 {
+            // Calculate distances from current center estimate
+            var sumDist: CGFloat = 0
+            for point in edgePixels {
+                let dx = CGFloat(point.x) - centerX
+                let dy = CGFloat(point.y) - centerY
+                sumDist += sqrt(dx * dx + dy * dy)
+            }
+            radius = sumDist / CGFloat(edgePixels.count)
+            
+            // Update center estimate using weighted average
+            var sumX: CGFloat = 0
+            var sumY: CGFloat = 0
+            var totalWeight: CGFloat = 0
+            
+            for point in edgePixels {
+                let px = CGFloat(point.x)
+                let py = CGFloat(point.y)
+                let dx = px - centerX
+                let dy = py - centerY
+                let dist = sqrt(dx * dx + dy * dy)
+                
+                // Weight by inverse distance from expected radius
+                // Points closer to the expected circle get higher weight
+                guard dist > 0.1 else { continue }
+                let weight = 1.0 / (1.0 + abs(dist - radius))
+                
+                sumX += px * weight
+                sumY += py * weight
+                totalWeight += weight
+            }
+            
+            guard totalWeight > 0 else { break }
+            
+            centerX = sumX / totalWeight
+            centerY = sumY / totalWeight
+        }
+        
+        // Validate the fit quality
+        // Check how many edge pixels are close to the fitted circle
+        var inliers = 0
+        let tolerance = max(radius * 0.3, 2.0) // 30% tolerance or 2 pixels, whichever is larger
+        
+        for point in edgePixels {
+            let dx = CGFloat(point.x) - centerX
+            let dy = CGFloat(point.y) - centerY
+            let dist = sqrt(dx * dx + dy * dy)
+            
+            if abs(dist - radius) < tolerance {
+                inliers += 1
+            }
+        }
+        
+        // Need at least 1/3 of edge pixels to be inliers for a good fit
+        let inlierRatio = CGFloat(inliers) / CGFloat(edgePixels.count)
+        guard inlierRatio >= 0.33 else { return nil }
+        
+        return (center: CGPoint(x: centerX, y: centerY), radius: radius)
     }
     
     /// Create a binary mask highlighting green regions
