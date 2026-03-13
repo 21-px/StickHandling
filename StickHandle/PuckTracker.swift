@@ -365,25 +365,38 @@ class PuckTracker: ObservableObject {
     /// Update the target color for puck detection
     /// - Parameter hsv: The HSV color to target
     func updateTargetColor(hsv: (h: CGFloat, s: CGFloat, v: CGFloat)) {
-        // Create a range around the selected color
-        // Wider range for hue (±0.08 or ±29°), narrower for sat/bright
-        let hueRange: CGFloat = 0.08
-        let satRange: CGFloat = 0.2
-        let brightRange: CGFloat = 0.2
+        // Create a WIDE range around the selected color for robust tracking in various lighting conditions
+        // Wider ranges help handle shadows, highlights, different ambient lighting, and reflections
+        
+        // Hue: ±0.15 (±54°) - much wider to handle color shifts from lighting
+        let hueRange: CGFloat = 0.15
+        
+        // Saturation: Accept from 0.1 to 1.0 - handles both washed-out colors (bright light) 
+        // and highly saturated colors (normal conditions)
+        // This allows the same color to be tracked whether it's in shadow, direct light, or reflection
+        let satMin: CGFloat = 0.2  // Very low threshold - even desaturated colors match
+        let satMax: CGFloat = 0.98  // Always accept up to fully saturated
+        
+        // Brightness: Accept from 0.2 to 1.0 - handles shadows (darker) and highlights (brighter)
+        // This is critical for tracking across varying lighting conditions
+        let brightMin: CGFloat = 0.2  // Low threshold for shadows
+        let brightMax: CGFloat = 0.98  // Always accept up to fully bright
         
         targetHue = (
             min: max(0, hsv.h - hueRange),
             max: min(1, hsv.h + hueRange)
         )
         
+        // Use absolute ranges for saturation and brightness instead of ranges around picked value
+        // This prevents the ranges from becoming too restrictive based on the picked sample
         targetSaturation = (
-            min: max(0, hsv.s - satRange),
-            max: min(1, hsv.s + satRange)
+            min: satMin,
+            max: satMax
         )
         
         targetBrightness = (
-            min: max(0, hsv.v - brightRange),
-            max: min(1, hsv.v + brightRange)
+            min: brightMin,
+            max: brightMax
         )
         
         // Save to UserDefaults
